@@ -706,6 +706,111 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 				proxies = append(proxies, mieru)
 			}
+
+		case "nowhere":
+			// nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&sni=...&alpn=...&pool=0..9&insecure=0|1&ech=...#name
+			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
+			// username is the shared key; a password component is not part of the
+			// Nowhere credential model. `up`/`down` independently select the upload
+			// and download carrier; legacy `net=` is accepted as a symmetric alias
+			// only when both up and down are omitted. Defaults to udp/udp.
+			urlNowhere, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+			query := urlNowhere.Query()
+
+			key := urlNowhere.User.Username()
+			if key == "" {
+				continue
+			}
+			if _, hasPassword := urlNowhere.User.Password(); hasPassword {
+				// A password component is not part of the Nowhere credential model.
+				continue
+			}
+
+			up := query.Get("up")
+			down := query.Get("down")
+			if (up == "") != (down == "") {
+				// One-sided up/down is ambiguous; reject rather than guess.
+				// Do not log the raw URI (it contains the shared key).
+				log.Warnln("nowhere share-link: up and down must both be set or both omitted")
+				continue
+			}
+			if up == "" && down == "" {
+				// Legacy symmetric alias: net= forces up == down == net.
+				if net := query.Get("net"); net != "" {
+					up = net
+					down = net
+				} else {
+					up, down = "udp", "udp"
+				}
+			}
+			if (up != "udp" && up != "tcp") || (down != "udp" && down != "tcp") {
+				log.Warnln("nowhere share-link: invalid carrier selector")
+				continue
+			}
+			tcpTCP := up == "tcp" && down == "tcp"
+
+			nowhere := make(map[string]any, 16)
+			nowhere["name"] = uniqueName(names, urlNowhere.Fragment)
+			nowhere["type"] = "nowhere"
+			nowhere["server"] = urlNowhere.Hostname()
+			if port := urlNowhere.Port(); port != "" {
+				nowhere["port"] = port
+			} else {
+				nowhere["port"] = "443"
+			}
+			nowhere["password"] = key
+			nowhere["udp"] = true
+
+			// Emit up/down as the canonical carrier selectors. Also surface
+			// network for back-compat with tooling that still introspects it.
+			nowhere["up"] = up
+			nowhere["down"] = down
+			nowhere["network"] = up
+			if sni := query.Get("sni"); sni != "" {
+				nowhere["sni"] = sni
+			}
+			if alpns, present := query["alpn"]; present {
+				if len(alpns) != 1 || alpns[0] == "" || len(alpns[0]) > 255 || strings.Contains(alpns[0], ",") {
+					continue
+				}
+				nowhere["alpn"] = []string{alpns[0]}
+			}
+			if pool := query.Get("pool"); pool != "" {
+				parsed, err := strconv.Atoi(pool)
+				if err != nil {
+					log.Warnln("nowhere share-link: invalid pool value")
+				} else if parsed < 0 {
+					log.Warnln("nowhere share-link: pool must be >= 0")
+				} else if tcpTCP {
+					if parsed > 9 {
+						log.Warnln("nowhere share-link: pool %d exceeds maximum 9; using 9", parsed)
+						parsed = 9
+					}
+					nowhere["pool"] = parsed
+				} else if parsed != 0 {
+					log.Warnln("nowhere share-link: pool is only effective for tcp/tcp; ignoring configured value")
+				}
+			}
+			if insecure, _ := strconv.ParseBool(query.Get("insecure")); insecure {
+				nowhere["skip-cert-verify"] = true
+			}
+			if fp := query.Get("fp"); fp != "" {
+				nowhere["fingerprint"] = fp
+			}
+			if pin := query.Get("pin"); pin != "" && pin != "none" {
+				nowhere["pin"] = pin
+			}
+			if ech := query.Get("ech"); ech != "" {
+				nowhere["ech-opts"] = map[string]any{
+					"enable": true,
+					"config": ech,
+				}
+			}
+
+			proxies = append(proxies, nowhere)
 		}
 	}
 
