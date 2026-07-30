@@ -25,22 +25,29 @@ type TLSConfig struct {
 	PrivateKey        string
 	ClientFingerprint string
 	NextProtos        []string
-	ECH               *ech.Config
-	ShadowTLS         *shadowtls.Config
-	Restls            *restls.Config
-	JLS               *jls.Config
-	Reality           *tlsC.RealityConfig
-	TLSMirror         *tlsmirror.Config
-	TLSMirrorDialer   tlsmirror.EnrollmentDialer
+	// MinVersion is optional. Zero keeps the previous ToStdConfig behavior
+	// (no explicit MinVersion). Nowhere sets tls.VersionTLS13.
+	MinVersion      uint16
+	ECH             *ech.Config
+	ShadowTLS       *shadowtls.Config
+	Restls          *restls.Config
+	JLS             *jls.Config
+	Reality         *tlsC.RealityConfig
+	TLSMirror       *tlsmirror.Config
+	TLSMirrorDialer tlsmirror.EnrollmentDialer
 }
 
 func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
+	std := &tls.Config{
+		ServerName:         cfg.Host,
+		InsecureSkipVerify: cfg.SkipCertVerify,
+		NextProtos:         cfg.NextProtos,
+	}
+	if cfg.MinVersion != 0 {
+		std.MinVersion = cfg.MinVersion
+	}
 	return ca.GetTLSConfig(ca.Option{
-		TLSConfig: &tls.Config{
-			ServerName:         cfg.Host,
-			InsecureSkipVerify: cfg.SkipCertVerify,
-			NextProtos:         cfg.NextProtos,
-		},
+		TLSConfig:      std,
 		Fingerprint:    cfg.FingerPrint,
 		NameCertVerify: cfg.NameCertVerify,
 		Certificate:    cfg.Certificate,
