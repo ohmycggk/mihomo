@@ -1,11 +1,8 @@
 # Nowhere 出站
 
-`mihomo` 内置 Nowhere 出站（`type: nowhere`）。协议核心为共享库
-`github.com/ohmycggk/nowhere-go`（Nowhere 1.5.x）；本仓只含客户端出站，**无 inbound**。
-服务端可对接 `sing-box` inbound 或 Rust 实现的 Nowhere Portal。
+`mihomo` 内置 Nowhere 出站（`type: nowhere`）。协议核心为共享库 `github.com/ohmycggk/nowhere-go`（Nowhere 1.5.x）；本仓只含客户端出站，**无 inbound**。服务端可对接 `sing-box` inbound 或 Rust 实现的 Nowhere Portal。
 
-客户端可独立选择上行 / 下行外层载体（TLS/TCP 或 QUIC/UDP），覆盖完整 `up` × `down`
-四矩阵；对称矩阵走直通快路径，非对称矩阵由 Portal 按 `(session_id, flow_id)` 配对。
+客户端可独立选择上行 / 下行外层载体（TLS/TCP 或 QUIC/UDP），覆盖完整 `up` × `down` 四矩阵；对称矩阵走直通快路径，非对称矩阵由 Portal 按 `(session_id, flow_id)` 配对。
 
 ## 最小配置
 
@@ -18,8 +15,7 @@ proxies:
     password: secret
 ```
 
-省略载体字段时默认 `up: udp` + `down: udp`（QUIC）。`password` 为必填字段，省略时
-启动报错。
+省略载体字段时默认 `up: udp` + `down: udp`（QUIC）。`password` 为必填字段，省略时启动报错。
 
 ## 上行 / 下行载体矩阵
 
@@ -30,13 +26,10 @@ proxies:
 | `tcp` | `udp` | FLOW `OPEN`/`ATTACH`：TLS/TCP 上行 + QUIC 流下行 | typed UoT 上行 + NOWU DATAGRAM 下行 |
 | `udp` | `tcp` | FLOW `OPEN`/`ATTACH`：QUIC 流上行 + TLS/TCP 下行 | NOWU DATAGRAM 上行 + typed UoT 下行 |
 
-- **所有 1.5 flow 都有 FLOW envelope**：对称矩阵使用 `DUPLEX`；非对称矩阵使用同一
-  `(session_id, flow_id)` 的 `OPEN` / `ATTACH`。
-- **非对称**（`up != down`）：对端须监听 mix（sing-box `network: ["tcp","udp"]`，或
-  Portal `net=mix`）；配对不依赖源 IP。
+- **所有 1.5 flow 都有 FLOW envelope**：对称矩阵使用 `DUPLEX`；非对称矩阵使用同一 `(session_id, flow_id)` 的 `OPEN` / `ATTACH`。
+- **非对称**（`up != down`）：对端须监听 mix（sing-box `network: ["tcp","udp"]`，或 Portal `net=mix`）；配对不依赖源 IP。
 
-载体字段规则：`up` / `down` 必须成对出现或同时缺省；只设其一启动报错。取值只能是
-`tcp` 或 `udp`，其它值启动报错；同时缺省时默认 `udp` / `udp`。
+载体字段规则：`up` / `down` 必须成对出现或同时缺省；只设其一启动报错。取值只能是 `tcp` 或 `udp`，其它值启动报错；同时缺省时默认 `udp` / `udp`。
 
 ## 字段说明
 
@@ -73,8 +66,7 @@ proxies:
 - 池内只保存「已认证、尚未发 request」的连接；发 request 后 carrier 被消耗，不回池。
 - 每个用户 TCP/UoT flow ≈ 一条独立 TLS/TCP carrier（固有线性成本）。
 - `pool: 0` 关闭预热，但业务流量仍可并行 fresh dial。
-- 冷池 miss：**先**完成业务 fresh，**成功后**才补 warm，避免 Portal 不可达时
-  fresh+warm 双倍拨号；`prewarm-on-start: true` 改为出站启动时即开始填池。
+- 冷池 miss：**先**完成业务 fresh，**成功后**才补 warm，避免 Portal 不可达时 fresh+warm 双倍拨号；`prewarm-on-start: true` 改为出站启动时即开始填池。
 - warm prepare 失败进入指数退避（默认 1s→30s）；退避窗口内跳过补池。
 - `warm-backoff-initial > warm-backoff-max` 或负数值会在启动时报错。
 - `max-concurrent-dials` 同时约束业务 fresh 与 warm；warm 只非阻塞占用空闲 slot。
@@ -194,23 +186,18 @@ nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&sni=...&alpn=h3&pool=0..9&inse
 
 - URL username 为共享 key，导入为 `password`；**带 password 段的链接会被丢弃**。
 - 省略端口时导入为 `port: 443`；导入结果固定带 `udp: true`。
-- `up` / `down` 必须同时出现或同时缺省；单边设置拒绝导入，都省略时默认
-  udp/udp。载体只能是 `tcp` 或 `udp`。
+- `up` / `down` 必须同时出现或同时缺省；单边设置拒绝导入，都省略时默认 udp/udp。载体只能是 `tcp` 或 `udp`。
 - `alpn` 出现时必须恰好一个值，且非空、不超过 255 字节、不含逗号，否则整条链接拒绝。
-- `pool` 仅在 tcp/tcp 矩阵导入，且钳制到 `0..9`（超过 9 告警并按 9 处理）；含 UDP
-  的矩阵忽略非零 pool 并告警。
+- `pool` 仅在 tcp/tcp 矩阵导入，且钳制到 `0..9`（超过 9 告警并按 9 处理）；含 UDP 的矩阵忽略非零 pool 并告警。
 - `insecure=1` → `skip-cert-verify: true`；`fp=` → `fingerprint`。
 - `pin=none` 或空值忽略，其它值写入 `pin` 字段。
 - `ech=` → `ech-opts: {enable: true, config: <value>}`。
-- 风暴抑制字段（`max-concurrent-dials`、`warm-backoff-*`、`prewarm-on-start`）目前仅
-  配置文件支持，不经 share-link 导入。
+- 风暴抑制字段（`max-concurrent-dials`、`warm-backoff-*`、`prewarm-on-start`）目前仅配置文件支持，不经 share-link 导入。
 
 ## 兼容性
 
-- **Nowhere 1.5 必须锁步升级 Portal 与全部客户端。** 认证绑定真实 TLS exporter；
-  混跑旧数据面不可用。
+- **Nowhere 1.5 必须锁步升级 Portal 与全部客户端。** 认证绑定真实 TLS exporter；混跑旧数据面不可用。
 - 对称矩阵可对接任意单载体或 mix 入站；非对称必须 mix。
 - 本仓 mihomo **无 inbound**；服务端用 sing-box inbound 或 Rust Portal。
 - UoT：当 `up` 或 `down` 为 `tcp` 时支持（`SupportUOT()`）。
-- 旧配置省略新字段时自动启用安全默认值；负数或
-  `warm-backoff-initial > warm-backoff-max` 会在启动时失败。
+- 旧配置省略新字段时自动启用安全默认值；负数或 `warm-backoff-initial > warm-backoff-max` 会在启动时失败。
