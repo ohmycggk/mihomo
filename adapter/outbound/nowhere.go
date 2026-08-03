@@ -33,7 +33,15 @@ type Nowhere struct {
 	*Base
 	option *NowhereOption
 
-	bundle *nowhere.CarrierBundle
+	bundle carrierBundle
+}
+
+// carrierBundle is the subset of *nowhere.CarrierBundle used by the outbound.
+// It exists so tests can substitute a recording fake.
+type carrierBundle interface {
+	OpenTCP(ctx context.Context, target nowhere.Target) (net.Conn, error)
+	OpenUDPAsync(ctx context.Context, target nowhere.Target) (net.PacketConn, error)
+	Close() error
 }
 
 // NowhereOption is the proxy map for a nowhere outbound.
@@ -105,11 +113,9 @@ func (n *Nowhere) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Co
 	return NewConn(conn, n), nil
 }
 
-// ListenPacketContext implements C.ProxyAdapter.
+// ListenPacketContext implements C.ProxyAdapter. Domain targets are passed to
+// the Portal unresolved: no local DNS resolution happens here.
 func (n *Nowhere) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (_ C.PacketConn, err error) {
-	if err = n.ResolveUDP(ctx, metadata); err != nil {
-		return nil, err
-	}
 	target, err := n.destination(metadata)
 	if err != nil {
 		return nil, err
@@ -142,18 +148,26 @@ func (n *Nowhere) Close() error {
 	return nil
 }
 
-// destination converts Mihomo metadata to the typed Nowhere 1.5 target.
+// destination converts Mihomo metadata to the typed Nowhere 1.5 target. A
+// non-IP-literal Host always wins over an already-resolved DstIP so the
+// original domain reaches the Portal as a Domain Target; the Portal resolves
+// it. Wire-level validation (empty/oversized domain, non-ASCII, zero port,
+// embedded port, bracketed IPv6) lives in nowhere-go's wire constructors and
+// is intentionally not duplicated here.
 func (n *Nowhere) destination(metadata *C.Metadata) (nowhere.Target, error) {
 	if metadata == nil {
 		return nowhere.Target{}, errors.New("nowhere: nil destination metadata")
 	}
+	if metadata.Host != "" {
+		if address, err := netip.ParseAddr(metadata.Host); err == nil {
+			return nowhere.NewIPTarget(address.Unmap(), metadata.DstPort)
+		}
+		return nowhere.NewDomainTarget(metadata.Host, metadata.DstPort)
+	}
 	if metadata.DstIP.IsValid() {
 		return nowhere.NewIPTarget(metadata.DstIP.Unmap(), metadata.DstPort)
 	}
-	if address, err := netip.ParseAddr(metadata.Host); err == nil {
-		return nowhere.NewIPTarget(address.Unmap(), metadata.DstPort)
-	}
-	return nowhere.NewDomainTarget(metadata.Host, metadata.DstPort)
+	return nowhere.Target{}, errors.New("nowhere: empty destination")
 }
 
 // NewNowhere builds a Nowhere outbound from its option map.
