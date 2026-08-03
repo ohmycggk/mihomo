@@ -712,8 +712,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
 			// username is the shared key; a password component is not part of the
 			// Nowhere credential model. `up`/`down` independently select the upload
-			// and download carrier; legacy `net=` is accepted as a symmetric alias
-			// only when both up and down are omitted. Defaults to udp/udp.
+			// and download carrier and default to udp/udp.
 			urlNowhere, err := url.Parse(line)
 			if err != nil {
 				continue
@@ -738,13 +737,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				continue
 			}
 			if up == "" && down == "" {
-				// Legacy symmetric alias: net= forces up == down == net.
-				if net := query.Get("net"); net != "" {
-					up = net
-					down = net
-				} else {
-					up, down = "udp", "udp"
-				}
+				up, down = "udp", "udp"
 			}
 			if (up != "udp" && up != "tcp") || (down != "udp" && down != "tcp") {
 				log.Warnln("nowhere share-link: invalid carrier selector")
@@ -764,11 +757,8 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			nowhere["password"] = key
 			nowhere["udp"] = true
 
-			// Emit up/down as the canonical carrier selectors. Also surface
-			// network for back-compat with tooling that still introspects it.
 			nowhere["up"] = up
 			nowhere["down"] = down
-			nowhere["network"] = up
 			if sni := query.Get("sni"); sni != "" {
 				nowhere["sni"] = sni
 			}

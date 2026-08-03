@@ -287,8 +287,8 @@ func TestConvertsV2RayVmessBase64HTTPRemappedToH2Transport(t *testing.T) {
 // TestConvertsV2RayNowhere covers the nowhere:// share-link import, mirroring
 // Anywhere's ProxyConfiguration+URLParsing.parseNowhere.
 func TestConvertsV2RayNowhere(t *testing.T) {
-	// key=secret, net=tcp (legacy symmetric alias), pool=3, with SNI/ALPN/insecure/ECH.
-	link := "nowhere://secret@example.com:2077?net=tcp&sni=real.example.com&alpn=now%2F1&pool=3&insecure=1&ech=ABCD1234#nw"
+	// key=secret, up=down=tcp, pool=3, with SNI/ALPN/insecure/ECH.
+	link := "nowhere://secret@example.com:2077?up=tcp&down=tcp&sni=real.example.com&alpn=now%2F1&pool=3&insecure=1&ech=ABCD1234#nw"
 
 	expected := []map[string]any{
 		{
@@ -300,7 +300,6 @@ func TestConvertsV2RayNowhere(t *testing.T) {
 			"udp":              true,
 			"up":               "tcp",
 			"down":             "tcp",
-			"network":          "tcp",
 			"sni":              "real.example.com",
 			"alpn":             []string{"now/1"},
 			"pool":             3,
@@ -319,6 +318,18 @@ func TestConvertsV2RayNowhere(t *testing.T) {
 	// The converted map must parse into a real Nowhere outbound.
 	_, err = adapter.ParseProxy(proxies[0])
 	assert.NoError(t, err)
+}
+
+// TestConvertsV2RayNowhereIgnoresLegacyNet pins that the removed net= alias is
+// no longer honored: carriers fall back to the udp/udp default and no network
+// key is emitted.
+func TestConvertsV2RayNowhereIgnoresLegacyNet(t *testing.T) {
+	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?net=tcp#legacy"))
+	assert.Nil(t, err)
+	assert.Len(t, proxies, 1)
+	assert.Equal(t, "udp", proxies[0]["up"])
+	assert.Equal(t, "udp", proxies[0]["down"])
+	assert.NotContains(t, proxies[0], "network")
 }
 
 func TestConvertsV2RayNowhereRejectsMultipleALPN(t *testing.T) {
