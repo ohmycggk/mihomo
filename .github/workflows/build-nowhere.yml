@@ -1,3 +1,4 @@
+# Nowhere 出站配置文档：https://github.com/ohmycggk/mihomo/blob/docs/nowhere/docs/nowhere.md
 name: Build Nowhere
 on:
   workflow_dispatch:
@@ -373,6 +374,10 @@ jobs:
         Release created at  ${{ env.BUILDTIME }}
         Synchronize ${{ github.ref_name }} branch code updates, keeping only the latest version
 
+        ## Nowhere 配置文档
+
+        - [Nowhere 出站配置说明](https://github.com/ohmycggk/mihomo/blob/docs/nowhere/docs/nowhere.md)
+
         ## 下载指南
 
         - 通用产物命名：`meta-<goos>-<arch>-<version>.gz`（Windows 为 `.zip`），解压后即为可执行文件。
@@ -434,6 +439,10 @@ jobs:
         cat > release.txt << 'EOF'
         Release created at  ${{ env.BUILDTIME }}
         Synchronize ${{ github.ref_name }} branch code updates, keeping only the latest version
+
+        ## Nowhere 配置文档
+
+        - [Nowhere 出站配置说明](https://github.com/ohmycggk/mihomo/blob/docs/nowhere/docs/nowhere.md)
 
         ## 下载指南
 
