@@ -6,12 +6,11 @@ import "testing"
 // "nowhere" type is wired into the registry and produces a C.Nowhere proxy.
 func TestParseNowhereProxy(t *testing.T) {
 	mapping := map[string]any{
-		"type":    "nowhere",
-		"name":    "nw",
-		"server":  "example.com",
-		"port":    2077,
-		"key":     "secret",
-		"network": "udp",
+		"type":     "nowhere",
+		"name":     "nw",
+		"server":   "example.com",
+		"port":     2077,
+		"password": "secret",
 	}
 	proxy, err := ParseProxy(mapping)
 	if err != nil {
@@ -24,65 +23,50 @@ func TestParseNowhereProxy(t *testing.T) {
 		t.Fatalf("SupportUDP = false, want true when udp key omitted")
 	}
 
-	passwordMapping := map[string]any{
+	// up/down select the carrier matrix and must be set together.
+	upDownMapping := map[string]any{
 		"type":     "nowhere",
-		"name":     "nw-password",
+		"name":     "nw-tcp",
 		"server":   "example.com",
 		"port":     2077,
 		"password": "secret",
+		"up":       "tcp",
+		"down":     "tcp",
 	}
-	if _, err := ParseProxy(passwordMapping); err != nil {
-		t.Fatalf("ParseProxy password alias: %v", err)
-	}
-
-	sameCredentialMapping := map[string]any{
-		"type": "nowhere", "name": "nw-same-credential", "server": "example.com",
-		"port": 2077, "password": "secret", "key": "secret",
-	}
-	if _, err := ParseProxy(sameCredentialMapping); err != nil {
-		t.Fatalf("ParseProxy matching password/key aliases: %v", err)
+	if _, err := ParseProxy(upDownMapping); err != nil {
+		t.Fatalf("ParseProxy up/down: %v", err)
 	}
 
-	conflictingCredentialMapping := map[string]any{
-		"type": "nowhere", "name": "nw-conflicting-credential", "server": "example.com",
-		"port": 2077, "password": "first-secret", "key": "second-secret",
-	}
-	if _, err := ParseProxy(conflictingCredentialMapping); err == nil {
-		t.Fatalf("ParseProxy accepted conflicting password/key aliases")
-	}
-
-	netAliasMapping := map[string]any{
-		"type":   "nowhere",
-		"name":   "nw-net",
-		"server": "example.com",
-		"port":   2077,
-		"key":    "secret",
-		"net":    "tcp",
-	}
-	if _, err := ParseProxy(netAliasMapping); err != nil {
-		t.Fatalf("ParseProxy net alias: %v", err)
-	}
-
-	// An unknown net value must be rejected at parse time.
+	// An unknown carrier value must be rejected at parse time.
 	badMapping := map[string]any{
 		"type": "nowhere", "name": "nw", "server": "example.com",
-		"port": 2077, "key": "secret", "network": "carrier-pigeon",
+		"port": 2077, "password": "secret", "up": "carrier-pigeon", "down": "udp",
 	}
 	if _, err := ParseProxy(badMapping); err == nil {
-		t.Fatalf("ParseProxy accepted invalid network")
+		t.Fatalf("ParseProxy accepted invalid carrier")
 	}
 
 	// A missing shared secret must be rejected.
-	noKeyMapping := map[string]any{
+	noPasswordMapping := map[string]any{
 		"type": "nowhere", "name": "nw", "server": "example.com", "port": 2077,
 	}
-	if _, err := ParseProxy(noKeyMapping); err == nil {
-		t.Fatalf("ParseProxy accepted missing password/key")
+	if _, err := ParseProxy(noPasswordMapping); err == nil {
+		t.Fatalf("ParseProxy accepted missing password")
+	}
+
+	// The legacy key/network/net aliases are gone: a mapping that only sets
+	// them decodes with an empty password and must be rejected.
+	legacyMapping := map[string]any{
+		"type": "nowhere", "name": "nw-legacy", "server": "example.com",
+		"port": 2077, "key": "secret", "network": "udp",
+	}
+	if _, err := ParseProxy(legacyMapping); err == nil {
+		t.Fatalf("ParseProxy accepted legacy key/network aliases")
 	}
 
 	udpDisabledMapping := map[string]any{
 		"type": "nowhere", "name": "nw", "server": "example.com",
-		"port": 2077, "key": "secret", "udp": false,
+		"port": 2077, "password": "secret", "udp": false,
 	}
 	udpDisabled, err := ParseProxy(udpDisabledMapping)
 	if err != nil {

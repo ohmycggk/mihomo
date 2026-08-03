@@ -43,21 +43,13 @@ type NowhereOption struct {
 	Server string `proxy:"server"`
 	Port   int    `proxy:"port"`
 	// Password is the shared key used to authenticate to the Portal. It is the
-	// canonical field name (matching trojan/anytls/tuic). Key is accepted as an
-	// alias for configurations written against the Nowhere portal URL
-	// convention, where the secret appears in the URL username.
+	// canonical field name (matching trojan/anytls/tuic).
 	Password string `proxy:"password,omitempty"`
-	Key      string `proxy:"key,omitempty"`
 	// Up and Down independently select the upload and download carrier
-	// ("tcp" for TLS/TCP or "udp" for QUIC/UDP). Each defaults to "udp". When
-	// both are set they take precedence over Network/Net.
+	// ("tcp" for TLS/TCP or "udp" for QUIC/UDP). Each defaults to "udp" and
+	// they must be set together.
 	Up   string `proxy:"up,omitempty"`
 	Down string `proxy:"down,omitempty"`
-	// Network is the canonical mihomo field name. Net remains accepted as a
-	// compatibility alias for older configs and share-link-derived mappings.
-	// Either forces the symmetric matrix up==down==network.
-	Network string `proxy:"network,omitempty"`
-	Net     string `proxy:"net,omitempty"` // "udp" (default) or "tcp"
 	// Pool is the warm TLS/TCP connection count (0..256), only meaningful for the
 	// tcp/tcp matrix. A nil/omitted value defaults to 5 for tcp/tcp and 0 for
 	// every matrix containing UDP. An explicit 0 disables the warm pool (every
@@ -73,7 +65,7 @@ type NowhereOption struct {
 	// Default false keeps first-business-dial-then-replenish behavior.
 	PrewarmOnStart bool `proxy:"prewarm-on-start,omitempty"`
 	// MaxConcurrentDials caps in-flight physical TLS/TCP dials per outbound.
-	// Omitted/0 uses the shared-core default (32).
+	// Omitted/0 uses the shared-core default (16).
 	MaxConcurrentDials *int `proxy:"max-concurrent-dials,omitempty"`
 	// WarmBackoffInitial is the first warm-prepare retry delay in seconds after
 	// failure. Omitted/0 uses 1s.
@@ -166,12 +158,8 @@ func (n *Nowhere) destination(metadata *C.Metadata) (nowhere.Target, error) {
 
 // NewNowhere builds a Nowhere outbound from its option map.
 func NewNowhere(option NowhereOption) (*Nowhere, error) {
-	if option.Password != "" && option.Key != "" && option.Password != option.Key {
-		return nil, fmt.Errorf("nowhere %s: password and key must match when both are set", option.Name)
-	}
-	key := option.sharedKey()
-	if key == "" {
-		return nil, fmt.Errorf("nowhere %s: missing password/key", option.Name)
+	if option.Password == "" {
+		return nil, fmt.Errorf("nowhere %s: missing password", option.Name)
 	}
 	if option.Port <= 0 {
 		return nil, fmt.Errorf("nowhere %s: invalid port %d", option.Name, option.Port)
@@ -182,9 +170,6 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	}
 	option.Up = up
 	option.Down = down
-	// Back-compat: surface a Net value for older callers that introspect it.
-	option.Network = up
-	option.Net = up
 	// Pool defaults: tcp/tcp -> 5 (warm pool on); any matrix containing UDP ->
 	// 0 (warm pool only applies to TLS/TCP and only the symmetric tcp/tcp
 	// matrix keeps lanes warm). An explicit 0 disables warming.
@@ -214,7 +199,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		serverName = option.SNI
 	}
 
-	credentials, err := nowhere.NewCredentials(key)
+	credentials, err := nowhere.NewCredentials(option.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -504,18 +489,8 @@ func nowhereCarrier(value string) nowhere.Carrier {
 	return nowhere.CarrierQUIC
 }
 
-// sharedKey returns the configured Portal secret. `password` is the canonical
-// field name; `key` remains accepted as a compatibility alias.
-func (o NowhereOption) sharedKey() string {
-	if o.Password != "" {
-		return o.Password
-	}
-	return o.Key
-}
-
 // resolveCarriers validates and resolves the up/down carrier selectors.
-// `up`/`down` win when set; otherwise `network`/`net` force the symmetric
-// matrix up==down==network; otherwise both default to "udp".
+// When neither is set both default to "udp".
 func (o NowhereOption) resolveCarriers() (up, down string, err error) {
 	switch {
 	case o.Up != "" && o.Down != "":
@@ -524,11 +499,7 @@ func (o NowhereOption) resolveCarriers() (up, down string, err error) {
 		// Setting only one of up/down is ambiguous; reject rather than guess.
 		return "", "", fmt.Errorf("nowhere %s: up and down must be set together", o.Name)
 	default:
-		net := o.transportNetwork()
-		if net == "" {
-			net = "udp"
-		}
-		up, down = net, net
+		up, down = "udp", "udp"
 	}
 	if !validCarrier(up) || !validCarrier(down) {
 		return "", "", fmt.Errorf("nowhere %s: invalid carrier (up=%q down=%q, must be tcp or udp)", o.Name, up, down)
@@ -537,16 +508,6 @@ func (o NowhereOption) resolveCarriers() (up, down string, err error) {
 }
 
 func validCarrier(s string) bool { return s == "tcp" || s == "udp" }
-
-// transportNetwork returns the legacy single-carrier selector used as a
-// fallback when neither up nor down is set. `network` is canonical; `net`
-// remains a compatibility alias.
-func (o NowhereOption) transportNetwork() string {
-	if o.Network != "" {
-		return o.Network
-	}
-	return o.Net
-}
 
 const defaultNowhereALPN = "now/1"
 
