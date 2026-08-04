@@ -43,6 +43,7 @@ const (
 	SUDOKU
 	TRUSTTUNNEL
 	SHADOWQUIC
+	NOWHERE
 	INNER
 )
 
@@ -124,6 +125,8 @@ func (t Type) String() string {
 		return "TrustTunnel"
 	case SHADOWQUIC:
 		return "ShadowQuic"
+	case NOWHERE:
+		return "Nowhere"
 	case INNER:
 		return "Inner"
 	default:
@@ -174,6 +177,8 @@ func ParseType(t string) (*Type, error) {
 		res = TRUSTTUNNEL
 	case "SHADOWQUIC":
 		res = SHADOWQUIC
+	case "NOWHERE":
+		res = NOWHERE
 	case "INNER":
 		res = INNER
 	default:
