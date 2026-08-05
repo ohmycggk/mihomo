@@ -13,8 +13,8 @@ import (
 type NowhereOption struct {
 	BaseOption
 	Password             string   `inbound:"password"`
-	Certificate          string   `inbound:"certificate"`
-	PrivateKey           string   `inbound:"private-key"`
+	Certificate          string   `inbound:"certificate,omitempty"`
+	PrivateKey           string   `inbound:"private-key,omitempty"`
 	EchKey               string   `inbound:"ech-key,omitempty"`
 	ALPN                 []string `inbound:"alpn,omitempty"`
 	CongestionController string   `inbound:"congestion-controller,omitempty"`

@@ -211,4 +211,20 @@ func TestParseListenerNowhere(t *testing.T) {
 	if !parsed.Config().Equal(parsedAgain.Config()) {
 		t.Fatalf("Config() round-trip mismatch: %v vs %v", parsed.Config(), parsedAgain.Config())
 	}
+
+	// certificate/private-key are optional (in-memory self-signed fallback):
+	// the structure decoder must not report them as unset fields.
+	delete(mapping, "certificate")
+	delete(mapping, "private-key")
+	parsedSelfSigned, err := listener.ParseListener(mapping)
+	if err != nil {
+		t.Fatalf("ParseListener without certificate: %v", err)
+	}
+	optionSelfSigned, ok := parsedSelfSigned.Config().(*IN.NowhereOption)
+	if !ok {
+		t.Fatalf("Config() = %T, want *inbound.NowhereOption", parsedSelfSigned.Config())
+	}
+	if optionSelfSigned.Certificate != "" || optionSelfSigned.PrivateKey != "" {
+		t.Fatalf("Certificate/PrivateKey = %q/%q, want empty", optionSelfSigned.Certificate, optionSelfSigned.PrivateKey)
+	}
 }
