@@ -109,27 +109,49 @@ func testTCPEcho(t *testing.T, client *outbound.Nowhere) {
 
 func testUDPEcho(t *testing.T, client *outbound.Nowhere) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	pc, err := client.ListenPacketContext(ctx, &C.Metadata{Host: "example.com", DstPort: 53})
 	if err != nil {
 		t.Fatalf("ListenPacketContext: %v", err)
 	}
 	defer func() { _ = pc.Close() }()
-	_ = pc.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// A single reader for the whole association. The Portal drops datagrams
+	// that arrive before the flow is READY by design (anti-replay), so the
+	// first write may legitimately be lost: retry the write until an echo
+	// comes back instead of failing on one dropped packet.
+	type echoResult struct {
+		data []byte
+		err  error
+	}
+	results := make(chan echoResult, 1)
+	go func() {
+		buf := make([]byte, 2048)
+		n, _, err := pc.ReadFrom(buf)
+		results <- echoResult{data: buf[:n], err: err}
+	}()
 
 	payload := []byte("nowhere udp echo")
-	if _, err := pc.WriteTo(payload, nil); err != nil {
-		t.Fatalf("WriteTo: %v", err)
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := pc.WriteTo(payload, nil); err != nil {
+			t.Fatalf("WriteTo: %v", err)
+		}
+		select {
+		case r := <-results:
+			if r.err != nil {
+				t.Fatalf("ReadFrom: %v", r.err)
+			}
+			if !bytes.Equal(r.data, payload) {
+				t.Fatalf("echo = %q, want %q", r.data, payload)
+			}
+			return
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			t.Fatalf("udp echo: %v", ctx.Err())
+		}
 	}
-	buf := make([]byte, 2048)
-	n, _, err := pc.ReadFrom(buf)
-	if err != nil {
-		t.Fatalf("ReadFrom: %v", err)
-	}
-	if !bytes.Equal(buf[:n], payload) {
-		t.Fatalf("echo = %q, want %q", buf[:n], payload)
-	}
+	t.Fatal("udp echo: no reply after 5 attempts")
 }
 
 // TestNowhereInboundInterop runs the real outbound against the real inbound
