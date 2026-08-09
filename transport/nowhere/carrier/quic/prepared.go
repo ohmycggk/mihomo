@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,7 +58,11 @@ func (s *Session) PrepareStream(ctx context.Context) (nquic.PreparedStream, erro
 	s.activeConns++
 	s.disarmIdleTimerLocked()
 	s.mu.Unlock()
-	return &preparedStream{session: s, stream: opened}, nil
+	prepared := &preparedStream{session: s, stream: opened}
+	// An abandoned prepared stream (panic or leaked by the caller) would pin
+	// the session forever; the finalizer releases it as a last resort.
+	runtime.SetFinalizer(prepared, (*preparedStream).abort)
+	return prepared, nil
 }
 
 func (p *preparedStream) Commit(ctx context.Context, setup []byte, finishWrite bool) (net.Conn, error) {
@@ -69,6 +74,7 @@ func (p *preparedStream) Commit(ctx context.Context, setup []byte, finishWrite b
 		err  error
 	)
 	p.once.Do(func() {
+		runtime.SetFinalizer(p, nil)
 		if p.stream == nil || p.session == nil {
 			err = errSessionClosed
 			return
@@ -131,6 +137,7 @@ func (p *preparedStream) Commit(ctx context.Context, setup []byte, finishWrite b
 func (p *preparedStream) Close() error {
 	var err error
 	p.once.Do(func() {
+		runtime.SetFinalizer(p, nil)
 		err = p.abort()
 	})
 	return err
@@ -282,9 +289,12 @@ func wrapStream(session *Session, opened stream) net.Conn {
 	var onClose func()
 	if session != nil {
 		onClose = session.ReleaseStream
-		if session.conn != nil {
-			lAddr = session.conn.LocalAddr()
-			rAddr = session.conn.RemoteAddr()
+		session.mu.Lock()
+		conn := session.conn
+		session.mu.Unlock()
+		if conn != nil {
+			lAddr = conn.LocalAddr()
+			rAddr = conn.RemoteAddr()
 		}
 	}
 	return &streamConn{stream: opened, lAddr: lAddr, rAddr: rAddr, onClose: onClose}
