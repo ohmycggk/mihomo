@@ -139,6 +139,7 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 		// carriers share one port even when the configured port is 0.
 		udpConn, err := lc.ListenPacket(context.Background(), "udp", tcpListener.Addr().String())
 		if err != nil {
+			_ = tcpListener.Close()
 			return nil, err
 		}
 		if err := sockopt.UDPReuseaddr(udpConn); err != nil {
@@ -150,6 +151,7 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 		// QuicConn.TLSHandshakeInfo is not yet available.
 		quicListener, err := quic.Listen(udpConn, tlsConfig, quicConfig)
 		if err != nil {
+			abandonListen(tcpListener, udpConn, nil)
 			return nil, err
 		}
 
@@ -165,6 +167,7 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 			},
 		})
 		if err != nil {
+			abandonListen(tcpListener, udpConn, quicListener)
 			return nil, err
 		}
 
@@ -234,6 +237,20 @@ func normalizeALPN(alpn []string) (string, error) {
 		return "", fmt.Errorf("nowhere: invalid alpn length %d", length)
 	}
 	return alpn[0], nil
+}
+
+// abandonListen closes listen resources that were opened during New but not yet
+// registered on Server (failure mid-address must not leak FDs/ports).
+func abandonListen(tcp net.Listener, udp net.PacketConn, qln *quic.Listener) {
+	if qln != nil {
+		_ = qln.Close()
+	}
+	if udp != nil {
+		_ = udp.Close()
+	}
+	if tcp != nil {
+		_ = tcp.Close()
+	}
 }
 
 func (s *Server) Close() error {
