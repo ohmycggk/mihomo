@@ -125,7 +125,12 @@ func (s *Session) run(ctx context.Context) {
 	s.finishReady(nil)
 	s.armIdleTimer()
 
-	<-s.conn.Context().Done()
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
+	if conn != nil {
+		<-conn.Context().Done()
+	}
 	if !s.IsClosed() {
 		s.emitTerminalWarning(ctx, "quic_connection_closed", errConnectionClosed)
 	}
@@ -217,13 +222,18 @@ func (s *Session) finishReady(err error) {
 }
 
 func (s *Session) openQUICStream(ctx context.Context) (stream, error) {
-	if s.openStream != nil {
-		return s.openStream(ctx)
+	s.mu.Lock()
+	openStream := s.openStream
+	conn := s.conn
+	closed := s.closed
+	s.mu.Unlock()
+	if openStream != nil {
+		return openStream(ctx)
 	}
-	if s.conn == nil {
+	if closed || conn == nil {
 		return nil, errSessionClosed
 	}
-	return s.conn.OpenStreamSync(ctx)
+	return conn.OpenStreamSync(ctx)
 }
 
 func (s *Session) ReleaseStream() {
@@ -327,13 +337,17 @@ func (s *Session) SendDatagram(ctx context.Context, frame []byte) error {
 }
 
 func (s *Session) LocalAddr() net.Addr {
-	if s.localAddr != nil {
-		return s.localAddr()
+	s.mu.Lock()
+	localAddr := s.localAddr
+	conn := s.conn
+	s.mu.Unlock()
+	if localAddr != nil {
+		return localAddr()
 	}
-	if s.conn != nil {
-		return s.conn.LocalAddr()
+	if conn != nil {
+		return conn.LocalAddr()
 	}
-	return &net.UDPAddr{}
+	return nil
 }
 
 func isTerminalSessionError(err error) bool {
@@ -394,6 +408,7 @@ func (s *Session) close() bool {
 		}
 		cancel = s.cancel
 		conn = s.conn
+		s.conn = nil
 		s.mu.Unlock()
 
 		close(s.lifetimeDone)
