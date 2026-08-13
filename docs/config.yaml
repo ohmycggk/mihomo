@@ -2288,6 +2288,18 @@ listeners:
     #    - now/1
     #  congestion-controller: bbr
     #  cwnd: 32
+    # 以下可选：填写 next 后启用 Portal 链式转发，将全部入站流量转发至下一个 Nowhere Portal，
+    # 并跳过 mihomo 的路由/规则（rule、proxy、rules 对该监听器均不生效）；
+    # 转发连接的 alpn 与 congestion-controller/cwnd 继承自上述监听配置；链上每个 Portal 必须运行 Nowhere >= 1.7
+    #  next:
+    #    server: origin.example # 必填，下一跳 Portal 地址
+    #    port: 2080 # 必填，下一跳 Portal 端口（1-65535）
+    #    password: origin-key # 必填，下一跳 Portal 的共享密钥
+    #    up: tcp # 上行载体，tcp 或 udp；必须与 down 同时设置，默认 udp/udp
+    #    down: tcp # 下行载体，tcp 或 udp；必须与 up 同时设置，默认 udp/udp
+    #    pool: 5 # 连接池大小，仅 up/down 均为 tcp 时默认 5，否则忽略；超过 256 时钳制为 256
+    #    sni: origin.example # 连接下一跳 Portal 时的 TLS SNI；省略/置空/none 时关闭证书链与域名校验（域名形式的 server 仍作为 ClientHello SNI 发送），显式域名则启用系统根证书链与域名校验
+    #    pin: <leaf cert sha256 hex> # 下一跳 Portal 叶子证书的 SHA-256 十六进制 pin 校验，优先于 sni/证书链校验；none 等价于省略
 
   - name: shadowquic-in-1
     type: shadowquic
