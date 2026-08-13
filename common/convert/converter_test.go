@@ -414,10 +414,10 @@ func TestConvertsV2RayNowhereRejectsOneSidedUpDown(t *testing.T) {
 
 // TestConvertsV2RayNowherePoolClamp covers tcp/tcp pool clamp and UDP ignore.
 func TestConvertsV2RayNowherePoolClamp(t *testing.T) {
-	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=tcp&down=tcp&pool=99#clamp"))
+	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=tcp&down=tcp&pool=999#clamp"))
 	assert.NoError(t, err)
 	assert.Len(t, proxies, 1)
-	assert.Equal(t, 9, proxies[0]["pool"])
+	assert.Equal(t, 256, proxies[0]["pool"])
 	_, err = adapter.ParseProxy(proxies[0])
 	assert.NoError(t, err)
 

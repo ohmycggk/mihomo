@@ -147,6 +147,59 @@ func TestNowhereListenPacketKeepsDomainTarget(t *testing.T) {
 	}
 }
 
+// TestNowherePinNoneDisablesPinning proves the "none" sentinel is normalized
+// away at construction: it must neither fail validation nor reach the dial
+// path (where PeerCertificatePinVerifier would reject it).
+func TestNowherePinNoneDisablesPinning(t *testing.T) {
+	n, err := NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Pin: "none",
+	})
+	if err != nil {
+		t.Fatalf("NewNowhere: %v", err)
+	}
+	if n.option.Pin != "" {
+		t.Fatalf("option.Pin = %q, want normalized empty", n.option.Pin)
+	}
+	if _, err := NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Pin: "not-hex",
+	}); err == nil {
+		t.Fatal("NewNowhere with invalid pin: want error")
+	}
+}
+
+func TestNowherePoolMatchesRustV17Semantics(t *testing.T) {
+	tooLarge := nowhere.MaxPoolSize + 1
+	n, err := NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Up: "tcp", Down: "tcp", Pool: &tooLarge,
+	})
+	if err != nil {
+		t.Fatalf("NewNowhere tcp/tcp: %v", err)
+	}
+	bundle, ok := n.bundle.(*nowhere.CarrierBundle)
+	if !ok {
+		t.Fatalf("bundle = %T, want *nowhere.CarrierBundle", n.bundle)
+	}
+	if got := bundle.PoolTarget(); got != nowhere.MaxPoolSize {
+		t.Fatalf("PoolTarget = %d, want clamped %d", got, nowhere.MaxPoolSize)
+	}
+	_ = n.Close()
+
+	// Rust parses pool only for tcp/tcp, so even a value that would be invalid
+	// for a TCP pool is ignored when either carrier is UDP.
+	negative := -1
+	n, err = NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Up: "udp", Down: "udp", Pool: &negative,
+	})
+	if err != nil {
+		t.Fatalf("NewNowhere udp/udp with ignored pool: %v", err)
+	}
+	_ = n.Close()
+}
+
 func TestNormalizeNowhereALPN(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/metacubex/mihomo/log"
+	nowhereTransport "github.com/metacubex/mihomo/transport/nowhere"
 )
 
 // ConvertsV2Ray convert V2Ray subscribe proxies data to mihomo proxies config
@@ -708,7 +709,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 
 		case "nowhere":
-			// nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&sni=...&alpn=...&pool=0..9&insecure=0|1&ech=...#name
+			// nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
 			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
 			// username is the shared key; a password component is not part of the
 			// Nowhere credential model. `up`/`down` independently select the upload
@@ -768,21 +769,21 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				}
 				nowhere["alpn"] = []string{alpns[0]}
 			}
-			if pool := query.Get("pool"); pool != "" {
+			if pool := query.Get("pool"); pool != "" && tcpTCP {
 				parsed, err := strconv.Atoi(pool)
 				if err != nil {
 					log.Warnln("nowhere share-link: invalid pool value")
 				} else if parsed < 0 {
 					log.Warnln("nowhere share-link: pool must be >= 0")
-				} else if tcpTCP {
-					if parsed > 9 {
-						log.Warnln("nowhere share-link: pool %d exceeds maximum 9; using 9", parsed)
-						parsed = 9
+				} else {
+					if parsed > nowhereTransport.MaxPoolSize {
+						log.Warnln("nowhere share-link: pool %d exceeds maximum %d; using %d", parsed, nowhereTransport.MaxPoolSize, nowhereTransport.MaxPoolSize)
+						parsed = nowhereTransport.MaxPoolSize
 					}
 					nowhere["pool"] = parsed
-				} else if parsed != 0 {
-					log.Warnln("nowhere share-link: pool is only effective for tcp/tcp; ignoring configured value")
 				}
+			} else if pool := query.Get("pool"); pool != "" && pool != "0" {
+				log.Warnln("nowhere share-link: pool is only effective for tcp/tcp; ignoring configured value")
 			}
 			if insecure, _ := strconv.ParseBool(query.Get("insecure")); insecure {
 				nowhere["skip-cert-verify"] = true

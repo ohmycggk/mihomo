@@ -38,13 +38,19 @@ func (fakeTunnel) HandleUDPPacket(packet C.UDPPacket, _ *C.Metadata) {
 // startTestServer binds 127.0.0.1:0; the listener binds TCP and UDP on the
 // same OS-assigned port, reported through AddrList.
 func startTestServer(t *testing.T) int {
+	return startTestServerWith(t, testCertificate, testPrivateKey)
+}
+
+// startTestServerWith is startTestServer with an explicit certificate pair;
+// pass empty strings for the in-memory self-signed fallback.
+func startTestServerWith(t *testing.T, certificate, privateKey string) int {
 	t.Helper()
 	server, err := nwlisten.New(LC.NowhereServer{
 		Enable:               true,
 		Listen:               "127.0.0.1:0",
 		Password:             testPassword,
-		Certificate:          testCertificate,
-		PrivateKey:           testPrivateKey,
+		Certificate:          certificate,
+		PrivateKey:           privateKey,
 		ALPN:                 []string{"now/1"},
 		CongestionController: "bbr",
 	}, inbound.NewListenConfig(), fakeTunnel{})
