@@ -148,7 +148,7 @@ func (n *Nowhere) Close() error {
 	return nil
 }
 
-// destination converts Mihomo metadata to the typed Nowhere 1.5 target. A
+// destination converts Mihomo metadata to the typed Nowhere target. A
 // non-IP-literal Host always wins over an already-resolved DstIP so the
 // original domain reaches the Portal as a Domain Target; the Portal resolves
 // it. Wire-level validation (empty/oversized domain, non-ASCII, zero port,
@@ -188,19 +188,20 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	// 0 (warm pool only applies to TLS/TCP and only the symmetric tcp/tcp
 	// matrix keeps lanes warm). An explicit 0 disables warming.
 	poolSize := 0
-	if option.Pool != nil && *option.Pool < 0 {
-		return nil, fmt.Errorf("nowhere %s: invalid pool %d (must be >= 0)", option.Name, *option.Pool)
-	}
-	if option.Pool != nil && *option.Pool > nowhere.MaxPoolSize {
-		return nil, fmt.Errorf("nowhere %s: invalid pool %d (maximum %d)", option.Name, *option.Pool, nowhere.MaxPoolSize)
-	}
 	if up == "tcp" && down == "tcp" {
 		if option.Pool == nil {
 			poolSize = nowhere.DefaultPoolSize
+		} else if *option.Pool < 0 {
+			return nil, fmt.Errorf("nowhere %s: invalid pool %d (must be >= 0)", option.Name, *option.Pool)
+		} else if *option.Pool > nowhere.MaxPoolSize {
+			log.Warnln("[Nowhere](%s) pool %d exceeds maximum %d; using %d", option.Name, *option.Pool, nowhere.MaxPoolSize, nowhere.MaxPoolSize)
+			poolSize = nowhere.MaxPoolSize
 		} else {
 			poolSize = *option.Pool
 		}
 	} else if option.Pool != nil && *option.Pool != 0 {
+		// Rust v1.7 only parses pool for tcp/tcp, so values that would be
+		// invalid for a TCP pool are ignored for every matrix containing UDP.
 		log.Warnln("[Nowhere](%s) pool is only effective for tcp/tcp; ignoring configured value %d", option.Name, *option.Pool)
 	}
 	if option.ClientFingerprint != "" && (up == "udp" || down == "udp") {
@@ -227,15 +228,18 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nowhere %s: %w", option.Name, err)
 	}
-	eff := newEffectiveTLS(option, serverName, alpn, echConfig)
-	if option.Pin != "" {
-		if _, err := nowhere.ParseCertificatePin(option.Pin); err != nil {
-			return nil, fmt.Errorf("nowhere %s: %w", option.Name, err)
-		}
-		if option.Fingerprint != "" && option.Fingerprint != option.Pin {
-			log.Warnln("[Nowhere](%s) pin overrides fingerprint for leaf-certificate pinning", option.Name)
-		}
+	// Normalize the pin before it is copied into effectiveTLS: empty or "none"
+	// disables pinning (Rust contract), a real pin is validated here so a bad
+	// value fails at construction instead of the first dial.
+	pin, err := nowhere.ParseCertificatePin(option.Pin)
+	if err != nil {
+		return nil, fmt.Errorf("nowhere %s: %w", option.Name, err)
 	}
+	option.Pin = pin
+	if option.Pin != "" && option.Fingerprint != "" && option.Fingerprint != option.Pin {
+		log.Warnln("[Nowhere](%s) pin overrides fingerprint for leaf-certificate pinning", option.Name)
+	}
+	eff := newEffectiveTLS(option, serverName, alpn, echConfig)
 	var tlsConfig *tls.Config
 	if up == "udp" || down == "udp" {
 		tlsConfig, err = eff.quicTLSConfig()

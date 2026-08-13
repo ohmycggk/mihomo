@@ -1,7 +1,8 @@
-// Package nowhere bridges the Nowhere 1.5 Portal implementation from
+// Package nowhere bridges the Nowhere 1.7 Portal implementation from
 // github.com/ohmycggk/nowhere-go/server into Mihomo's inbound listener
 // framework: authenticated TCP streams and UDP packet flows are handed to the
-// tunnel exactly like any other protocol inbound.
+// tunnel exactly like any other protocol inbound, or — with a next section —
+// forwarded to another Nowhere Portal (native Portal chaining).
 package nowhere
 
 import (
@@ -45,6 +46,11 @@ type Server struct {
 	tcpListeners  []net.Listener
 	udpListeners  []net.PacketConn
 	quicListeners []*quic.Listener
+
+	// portalBundle is the next-hop client carrier for native Portal chaining
+	// (config.Next). PortalUpstream borrows it without owning it, so it must
+	// close after every nowhere server has drained.
+	portalBundle *nwtransport.CarrierBundle
 }
 
 func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Server, error) {
@@ -114,9 +120,22 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 	quicConfig.InitialConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 	quicConfig.MaxConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 
-	flowUpstream := &upstream{tunnel: tunnel, additions: additions}
+	// Native Portal chaining (Nowhere 1.7): when next is configured, inbound
+	// flows forward to another Nowhere Portal instead of entering the tunnel.
+	// The next-hop bundle inherits the listener ALPN (Rust contract) and the
+	// listener congestion-controller/cwnd for its QUIC backend.
+	var flowUpstream nwserver.Upstream = &upstream{tunnel: tunnel, additions: additions}
+	var portalBundle *nwtransport.CarrierBundle
+	if config.Next != nil {
+		portalUpstream, bundle, err := newPortalUpstream(config.Next, alpn, config.CongestionController, config.CWND)
+		if err != nil {
+			return nil, err
+		}
+		flowUpstream = portalUpstream
+		portalBundle = bundle
+	}
 
-	s := &Server{config: config}
+	s := &Server{config: config, portalBundle: portalBundle}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	success := false
 	defer func() {
@@ -260,6 +279,13 @@ func (s *Server) Close() error {
 	var retErr error
 	for _, srv := range s.servers {
 		if err := srv.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			retErr = err
+		}
+	}
+	// PortalUpstream is non-owning: the next-hop bundle closes only after
+	// every nowhere server has drained its inbound handlers.
+	if s.portalBundle != nil {
+		if err := s.portalBundle.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			retErr = err
 		}
 	}
