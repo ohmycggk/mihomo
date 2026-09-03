@@ -438,3 +438,22 @@ func TestConvertsV2RayNowhereNegativePool(t *testing.T) {
 	_, hasPool := proxies[0]["pool"]
 	assert.False(t, hasPool)
 }
+
+func TestConvertsV2RayNowhereMixMux(t *testing.T) {
+	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=mix&down=mix&mux=1#mix"))
+	assert.NoError(t, err)
+	assert.Len(t, proxies, 1)
+	assert.Equal(t, "mix", proxies[0]["up"])
+	assert.Equal(t, "mix", proxies[0]["down"])
+	assert.Equal(t, 1, proxies[0]["mux"])
+	_, err = adapter.ParseProxy(proxies[0])
+	assert.NoError(t, err)
+
+	proxies, err = ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=udp&down=udp&mux=1#canon"))
+	assert.NoError(t, err)
+	assert.Len(t, proxies, 1)
+	_, hasMux := proxies[0]["mux"]
+	assert.False(t, hasMux)
+	_, err = adapter.ParseProxy(proxies[0])
+	assert.NoError(t, err)
+}

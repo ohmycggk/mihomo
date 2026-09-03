@@ -709,11 +709,11 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 
 		case "nowhere":
-			// nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
+			// nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
 			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
 			// username is the shared key; a password component is not part of the
 			// Nowhere credential model. `up`/`down` independently select the upload
-			// and download carrier and default to udp/udp.
+			// and download carrier (or mix policy) and default to udp/udp.
 			urlNowhere, err := url.Parse(line)
 			if err != nil {
 				continue
@@ -740,11 +740,24 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			if up == "" && down == "" {
 				up, down = "udp", "udp"
 			}
-			if (up != "udp" && up != "tcp") || (down != "udp" && down != "tcp") {
+			if !validNowhereShareCarrier(up) || !validNowhereShareCarrier(down) {
 				log.Warnln("nowhere share-link: invalid carrier selector")
 				continue
 			}
-			tcpTCP := up == "tcp" && down == "tcp"
+			mux := 0
+			if rawMux := query.Get("mux"); rawMux != "" {
+				parsed, err := strconv.Atoi(rawMux)
+				if err != nil || (parsed != 0 && parsed != 1) {
+					log.Warnln("nowhere share-link: invalid mux value")
+					continue
+				}
+				mux = parsed
+				if mux == 1 && up == "udp" && down == "udp" {
+					log.Warnln("nowhere share-link: mux=1 is canonicalized to 0 for udp/udp")
+					mux = 0
+				}
+			}
+			tcpTCP := up == "tcp" && down == "tcp" && mux == 0
 
 			nowhere := make(map[string]any, 16)
 			nowhere["name"] = uniqueName(names, urlNowhere.Fragment)
@@ -760,7 +773,10 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 			nowhere["up"] = up
 			nowhere["down"] = down
-			if sni := query.Get("sni"); sni != "" {
+			if mux == 1 {
+				nowhere["mux"] = 1
+			}
+			if sni := query.Get("sni"); sni != "" && sni != "none" {
 				nowhere["sni"] = sni
 			}
 			if alpns, present := query["alpn"]; present {
@@ -783,7 +799,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 					nowhere["pool"] = parsed
 				}
 			} else if pool := query.Get("pool"); pool != "" && pool != "0" {
-				log.Warnln("nowhere share-link: pool is only effective for tcp/tcp; ignoring configured value")
+				log.Warnln("nowhere share-link: pool is only effective for dedicated tcp/tcp; ignoring configured value")
 			}
 			if insecure, _ := strconv.ParseBool(query.Get("insecure")); insecure {
 				nowhere["skip-cert-verify"] = true
@@ -822,4 +838,8 @@ func uniqueName(names map[string]int, name string) string {
 		names[name] = index
 	}
 	return name
+}
+
+func validNowhereShareCarrier(s string) bool {
+	return s == "tcp" || s == "udp" || s == "mix"
 }

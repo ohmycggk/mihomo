@@ -2341,9 +2341,11 @@ listeners:
     #    server: origin.example # 必填，下一跳 Portal 地址
     #    port: 2080 # 必填，下一跳 Portal 端口（1-65535）
     #    password: origin-key # 必填，下一跳 Portal 的共享密钥
-    #    up: tcp # 上行载体，tcp 或 udp；必须与 down 同时设置，默认 udp/udp
-    #    down: tcp # 下行载体，tcp 或 udp；必须与 up 同时设置，默认 udp/udp
-    #    pool: 5 # 连接池大小，仅 up/down 均为 tcp 时默认 5，否则忽略；超过 256 时钳制为 256
+    #    up: tcp # 上行载体，tcp、udp 或 mix；必须与 down 同时设置，默认 udp/udp
+    #    down: tcp # 下行载体，tcp、udp 或 mix；必须与 up 同时设置，默认 udp/udp
+    #    mux: 0 # 0 专用 TLS 通道（默认），1 启用 TLS Mux；任一方向为 tcp 或 mix 时生效，udp/udp 会规范为 0
+    #    pool: 5 # 连接池大小，仅 mux=0 且 tcp/tcp 时默认 5，否则忽略；超过 256 时钳制为 256
+    #    mix-fallback-timeout: 1 # mix 主路由准备超时（秒），省略/0 使用 1s
     #    sni: origin.example # 连接下一跳 Portal 时的 TLS SNI；省略/置空/none 时关闭证书链与域名校验（域名形式的 server 仍作为 ClientHello SNI 发送），显式域名则启用系统根证书链与域名校验
     #    pin: <leaf cert sha256 hex> # 下一跳 Portal 叶子证书的 SHA-256 十六进制 pin 校验，优先于 sni/证书链校验；none 等价于省略
 
