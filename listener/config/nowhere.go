@@ -17,7 +17,7 @@ type NowhereServer struct {
 	Next                 *NowhereNext `yaml:"next" json:"next,omitempty"`
 }
 
-// NowhereNext is the next-hop Portal for native Portal chaining (Nowhere 1.7):
+// NowhereNext is the next-hop Portal for native Portal chaining (Nowhere 1.7+):
 // when set, the listener forwards every inbound flow to another Nowhere Portal
 // instead of the tunnel. The forwarding connection inherits the listener ALPN
 // and congestion-controller/cwnd.
@@ -26,13 +26,19 @@ type NowhereNext struct {
 	Port     int    `yaml:"port" json:"port"`
 	Password string `yaml:"password" json:"password"`
 	// Up and Down independently select the carrier towards the next Portal
-	// ("tcp" for TLS/TCP or "udp" for QUIC/UDP). Each defaults to "udp" and
-	// they must be set together.
+	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
+	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
 	Up   string `yaml:"up" json:"up,omitempty"`
 	Down string `yaml:"down" json:"down,omitempty"`
-	// Pool is the warm TLS/TCP connection count, only meaningful for the
-	// tcp/tcp matrix (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
+	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1)
+	// towards the next Portal. udp/udp&mux=1 canonicalizes to 0.
+	Mux *int `yaml:"mux" json:"mux,omitempty"`
+	// Pool is the warm TLS/TCP connection count, only meaningful for dedicated
+	// (mux=0) tcp/tcp (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
 	Pool *int `yaml:"pool" json:"pool,omitempty"`
+	// MixFallbackTimeout is the mix primary-route budget in seconds. Omitted/0
+	// uses the library default (1s).
+	MixFallbackTimeout *int `yaml:"mix-fallback-timeout" json:"mix-fallback-timeout,omitempty"`
 	// SNI overrides the TLS server name used towards the next Portal. Empty or
 	// the literal "none" disables certificate verification (a domain server is
 	// still sent as ClientHello SNI); an explicit DNS name enables chain+name

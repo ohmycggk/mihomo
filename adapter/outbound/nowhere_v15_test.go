@@ -233,3 +233,54 @@ func TestNormalizeNowhereALPN(t *testing.T) {
 		})
 	}
 }
+
+func TestNowhereMuxAndMixConstruction(t *testing.T) {
+	muxOne := 1
+	muxBad := 2
+	poolFive := 5
+
+	n, err := NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Up: "tcp", Down: "tcp", Mux: &muxOne, Pool: &poolFive,
+	})
+	if err != nil {
+		t.Fatalf("NewNowhere mux=1: %v", err)
+	}
+	bundle, ok := n.bundle.(*nowhere.CarrierBundle)
+	if !ok {
+		t.Fatalf("bundle = %T, want *nowhere.CarrierBundle", n.bundle)
+	}
+	if got := bundle.PoolTarget(); got != 0 {
+		t.Fatalf("mux=1 PoolTarget = %d, want 0", got)
+	}
+	if !n.SupportUOT() {
+		t.Fatal("tcp/tcp SupportUOT = false")
+	}
+	_ = n.Close()
+
+	n, err = NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Up: "mix", Down: "mix",
+	})
+	if err != nil {
+		t.Fatalf("NewNowhere mix/mix: %v", err)
+	}
+	bundle, ok = n.bundle.(*nowhere.CarrierBundle)
+	if !ok {
+		t.Fatalf("bundle = %T, want *nowhere.CarrierBundle", n.bundle)
+	}
+	if !bundle.MixEnabled() {
+		t.Fatal("mix/mix MixEnabled = false")
+	}
+	if !n.SupportUOT() {
+		t.Fatal("mix/mix SupportUOT = false")
+	}
+	_ = n.Close()
+
+	if _, err := NewNowhere(NowhereOption{
+		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
+		Mux: &muxBad,
+	}); err == nil {
+		t.Fatal("NewNowhere mux=2: want error")
+	}
+}

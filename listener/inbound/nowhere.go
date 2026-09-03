@@ -25,21 +25,27 @@ type NowhereOption struct {
 }
 
 // NowhereNextOption is the next-hop Portal for native Portal chaining
-// (Nowhere 1.7): when set, the listener forwards every inbound flow to
+// (Nowhere 1.7+): when set, the listener forwards every inbound flow to
 // another Nowhere Portal instead of the tunnel. Validation mirrors the
-// outbound's carrier/pool rules (adapter/outbound/nowhere.go).
+// outbound's carrier/mux/pool rules (adapter/outbound/nowhere.go).
 type NowhereNextOption struct {
 	Server   string `inbound:"server"`
 	Port     int    `inbound:"port"`
 	Password string `inbound:"password"`
 	// Up and Down independently select the carrier towards the next Portal
-	// ("tcp" for TLS/TCP or "udp" for QUIC/UDP). Each defaults to "udp" and
-	// they must be set together.
+	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
+	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
 	Up   string `inbound:"up,omitempty"`
 	Down string `inbound:"down,omitempty"`
-	// Pool is the warm TLS/TCP connection count, only meaningful for the
-	// tcp/tcp matrix (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
+	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1)
+	// towards the next Portal. udp/udp&mux=1 canonicalizes to 0.
+	Mux *int `inbound:"mux,omitempty"`
+	// Pool is the warm TLS/TCP connection count, only meaningful for dedicated
+	// (mux=0) tcp/tcp (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
 	Pool *int `inbound:"pool,omitempty"`
+	// MixFallbackTimeout is the mix primary-route budget in seconds. Omitted/0
+	// uses the library default (1s).
+	MixFallbackTimeout *int `inbound:"mix-fallback-timeout,omitempty"`
 	// SNI overrides the TLS server name used towards the next Portal. Empty or
 	// the literal "none" disables certificate verification (a domain server is
 	// still sent as ClientHello SNI); an explicit DNS name enables chain+name
@@ -128,24 +134,18 @@ func validateNowhereNext(name string, next *NowhereNextOption) error {
 	if len(next.Password) > 255 {
 		return fmt.Errorf("nowhere %s: next: password exceeds 255 bytes", name)
 	}
-	switch {
-	case next.Up != "" && next.Down != "":
-	case next.Up == "" && next.Down == "":
-	default:
-		// Setting only one of up/down is ambiguous; reject rather than guess.
-		return fmt.Errorf("nowhere %s: next: up and down must be set together", name)
-	}
-	if (next.Up != "" && !validNowhereCarrier(next.Up)) || (next.Down != "" && !validNowhereCarrier(next.Down)) {
-		return fmt.Errorf("nowhere %s: next: invalid carrier (up=%q down=%q, must be tcp or udp)", name, next.Up, next.Down)
-	}
-	if next.Up == "tcp" && next.Down == "tcp" && next.Pool != nil {
-		if *next.Pool < 0 {
-			return fmt.Errorf("nowhere %s: next: invalid pool %d (must be >= 0)", name, *next.Pool)
-		}
-		if *next.Pool > nwtransport.MaxPoolSize {
-			log.Warnln("[Nowhere](%s) next pool %d exceeds maximum %d; using %d", name, *next.Pool, nwtransport.MaxPoolSize, nwtransport.MaxPoolSize)
-			*next.Pool = nwtransport.MaxPoolSize
-		}
+	if _, err := nwtransport.ResolveRoutePolicy(nwtransport.RouteInputs{
+		Prefix:             fmt.Sprintf("nowhere %s: next", name),
+		Up:                 next.Up,
+		Down:               next.Down,
+		Pool:               next.Pool,
+		Mux:                next.Mux,
+		MixFallbackTimeout: next.MixFallbackTimeout,
+		Warn: func(format string, args ...any) {
+			log.Warnln("[Nowhere](%s) next "+format, append([]any{name}, args...)...)
+		},
+	}); err != nil {
+		return err
 	}
 	// Rust contract (vector/config.rs): the literal "none" is an alias for an
 	// omitted sni/pin.
@@ -159,8 +159,6 @@ func validateNowhereNext(name string, next *NowhereNextOption) error {
 	}
 	return nil
 }
-
-func validNowhereCarrier(s string) bool { return s == "tcp" || s == "udp" }
 
 // normalizeNowhereNone maps the Rust "none" sentinel for sni/pin onto the
 // empty value, which the listener config treats as unset.
@@ -197,14 +195,16 @@ func nowhereNextConfig(o *NowhereNextOption) *LC.NowhereNext {
 		return nil
 	}
 	return &LC.NowhereNext{
-		Server:   o.Server,
-		Port:     o.Port,
-		Password: o.Password,
-		Up:       o.Up,
-		Down:     o.Down,
-		Pool:     o.Pool,
-		SNI:      normalizeNowhereNone(o.SNI),
-		Pin:      normalizeNowhereNone(o.Pin),
+		Server:             o.Server,
+		Port:               o.Port,
+		Password:           o.Password,
+		Up:                 o.Up,
+		Down:               o.Down,
+		Mux:                o.Mux,
+		Pool:               o.Pool,
+		MixFallbackTimeout: o.MixFallbackTimeout,
+		SNI:                normalizeNowhereNone(o.SNI),
+		Pin:                normalizeNowhereNone(o.Pin),
 	}
 }
 

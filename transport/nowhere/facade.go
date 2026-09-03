@@ -31,11 +31,19 @@ type (
 
 	BundleOptions = bundle.BundleOptions
 	CarrierBundle = bundle.CarrierBundle
+	MuxMode       = bundle.MuxMode
+	CarrierMode   = bundle.CarrierMode
 )
 
 const (
-	DefaultPoolSize = tcptls.DefaultPoolSize
-	MaxPoolSize     = tcptls.MaxPoolSize
+	DefaultPoolSize           = tcptls.DefaultPoolSize
+	MaxPoolSize               = tcptls.MaxPoolSize
+	MuxDisabled               = bundle.MuxDisabled
+	MuxEnabled                = bundle.MuxEnabled
+	ModeTCP                   = bundle.ModeTCP
+	ModeUDP                   = bundle.ModeUDP
+	ModeMix                   = bundle.ModeMix
+	DefaultMixFallbackTimeout = bundle.DefaultMixFallbackTimeout
 
 	FlowRoleOpen        = wire.FlowRoleOpen
 	FlowRoleAttach      = wire.FlowRoleAttach
@@ -50,6 +58,7 @@ var (
 	NewCredentials   = wire.NewCredentials
 	NewTCPConfig     = tcptls.NewConfig
 	NewCarrierBundle = bundle.NewCarrierBundle
+	ParseCarrierMode = bundle.ParseCarrierMode
 
 	ParseCertificatePin        = wire.ParseCertificatePin
 	PeerCertificatePinVerifier = wire.PeerCertificatePinVerifier
