@@ -24,11 +24,12 @@ import (
 
 // Nowhere is the Nowhere v1 proxy outbound. It speaks the protocol defined by
 // Nowhere/docs/protocol.md and supports the full client carrier matrix: the
-// upload and download carriers may each independently be TLS/TCP or QUIC/UDP,
-// yielding four combinations (tcp/tcp, tcp/udp, udp/tcp, udp/udp) for both TCP
-// relay and UDP traffic. Symmetric combinations (up==down) use the direct fast
-// path; asymmetric combinations are paired by the Portal on a shared session
-// id and flow id. See docs in transport/nowhere for the wire format.
+// upload and download carriers may each independently be TLS/TCP, QUIC/UDP, or
+// mix, yielding the four fixed combinations plus Nowhere 1.8.3 mix policy for
+// both TCP relay and UDP traffic. Symmetric combinations (up==down) use the
+// direct fast path; asymmetric combinations are paired by the Portal on a
+// shared session id and flow id. mix is resolved per flow before FlowHeader.
+// TLS Mux (mux=1) shares marked TLS shards instead of dedicated lanes.
 type Nowhere struct {
 	*Base
 	option *NowhereOption
@@ -54,14 +55,18 @@ type NowhereOption struct {
 	// canonical field name (matching trojan/anytls/tuic).
 	Password string `proxy:"password,omitempty"`
 	// Up and Down independently select the upload and download carrier
-	// ("tcp" for TLS/TCP or "udp" for QUIC/UDP). Each defaults to "udp" and
-	// they must be set together.
+	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
+	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
 	Up   string `proxy:"up,omitempty"`
 	Down string `proxy:"down,omitempty"`
-	// Pool is the warm TLS/TCP connection count (0..256), only meaningful for the
-	// tcp/tcp matrix. A nil/omitted value defaults to 5 for tcp/tcp and 0 for
-	// every matrix containing UDP. An explicit 0 disables the warm pool (every
-	// flow opens a fresh connection), mirroring the Anywhere client.
+	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1).
+	// Mux applies when either direction is tcp or mix; udp/udp&mux=1
+	// canonicalizes to 0.
+	Mux *int `proxy:"mux,omitempty"`
+	// Pool is the warm TLS/TCP connection count (0..256), only meaningful for
+	// dedicated (mux=0) tcp/tcp. A nil/omitted value defaults to 5 there and 0
+	// for mux=1 or any matrix that can select QUIC. An explicit 0 disables the
+	// warm pool (every flow opens a fresh connection).
 	//
 	// Diagnostics: pool=0 is equivalent to disabling preconnect — every flow
 	// dials its own carrier, which is the cleanest signal when troubleshooting
@@ -69,6 +74,9 @@ type NowhereOption struct {
 	// in the [Nowhere] [carrier] debug log). Compare pool=0 vs pool=5 to isolate
 	// warm-pool behavior from per-flow carrier behavior.
 	Pool *int `proxy:"pool,omitempty"`
+	// MixFallbackTimeout is the mix primary-route preparation budget in
+	// seconds. Omitted/0 uses the library default (1s).
+	MixFallbackTimeout *int `proxy:"mix-fallback-timeout,omitempty"`
 	// PrewarmOnStart fills the warm TLS/TCP pool at outbound start (tcp/tcp only).
 	// Default false keeps first-business-dial-then-replenish behavior.
 	PrewarmOnStart bool `proxy:"prewarm-on-start,omitempty"`
@@ -127,10 +135,10 @@ func (n *Nowhere) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	return NewPacketConn(N.NewThreadSafePacketConn(pc), n), nil
 }
 
-// SupportUOT implements C.ProxyAdapter. The bundle exposes UoT whenever TCP is
-// part of the carrier matrix (downlink or uplink).
+// SupportUOT implements C.ProxyAdapter. The bundle exposes UoT whenever TCP can
+// be selected (a fixed tcp direction or mix).
 func (n *Nowhere) SupportUOT() bool {
-	return n.option.Up == "tcp" || n.option.Down == "tcp"
+	return n.option.Up != "udp" || n.option.Down != "udp"
 }
 
 // ProxyInfo implements C.ProxyAdapter.
@@ -178,33 +186,23 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	if option.Port <= 0 {
 		return nil, fmt.Errorf("nowhere %s: invalid port %d", option.Name, option.Port)
 	}
-	up, down, err := option.resolveCarriers()
+	policy, err := nowhere.ResolveRoutePolicy(nowhere.RouteInputs{
+		Prefix:             fmt.Sprintf("nowhere %s", option.Name),
+		Up:                 option.Up,
+		Down:               option.Down,
+		Pool:               option.Pool,
+		Mux:                option.Mux,
+		MixFallbackTimeout: option.MixFallbackTimeout,
+		Warn: func(format string, args ...any) {
+			log.Warnln("[Nowhere](%s) "+format, append([]any{option.Name}, args...)...)
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
-	option.Up = up
-	option.Down = down
-	// Pool defaults: tcp/tcp -> 5 (warm pool on); any matrix containing UDP ->
-	// 0 (warm pool only applies to TLS/TCP and only the symmetric tcp/tcp
-	// matrix keeps lanes warm). An explicit 0 disables warming.
-	poolSize := 0
-	if up == "tcp" && down == "tcp" {
-		if option.Pool == nil {
-			poolSize = nowhere.DefaultPoolSize
-		} else if *option.Pool < 0 {
-			return nil, fmt.Errorf("nowhere %s: invalid pool %d (must be >= 0)", option.Name, *option.Pool)
-		} else if *option.Pool > nowhere.MaxPoolSize {
-			log.Warnln("[Nowhere](%s) pool %d exceeds maximum %d; using %d", option.Name, *option.Pool, nowhere.MaxPoolSize, nowhere.MaxPoolSize)
-			poolSize = nowhere.MaxPoolSize
-		} else {
-			poolSize = *option.Pool
-		}
-	} else if option.Pool != nil && *option.Pool != 0 {
-		// Rust v1.7 only parses pool for tcp/tcp, so values that would be
-		// invalid for a TCP pool are ignored for every matrix containing UDP.
-		log.Warnln("[Nowhere](%s) pool is only effective for tcp/tcp; ignoring configured value %d", option.Name, *option.Pool)
-	}
-	if option.ClientFingerprint != "" && (up == "udp" || down == "udp") {
+	option.Up = policy.Up
+	option.Down = policy.Down
+	if option.ClientFingerprint != "" && policy.UsesQUIC {
 		log.Warnln("[Nowhere](%s) client-fingerprint applies only to TLS/TCP carrier; QUIC uses the standard TLS ClientHello", option.Name)
 	}
 
@@ -241,7 +239,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	}
 	eff := newEffectiveTLS(option, serverName, alpn, echConfig)
 	var tlsConfig *tls.Config
-	if up == "udp" || down == "udp" {
+	if policy.UsesQUIC {
 		tlsConfig, err = eff.quicTLSConfig()
 		if err != nil {
 			return nil, err
@@ -296,7 +294,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		},
 	}
 	var tcpCfg *nowhere.TCPConfig
-	if up == "tcp" || down == "tcp" {
+	if policy.UsesTCP {
 		var tlsDialer nowhere.TLSDialer = &vmessTLSDialer{cfg: eff.tcpTLSConfig()}
 		if option.Pin != "" {
 			tlsDialer = &pinTLSDialer{cfg: eff.tcpTLSConfig(), pin: option.Pin}
@@ -317,10 +315,13 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 	}
 	bundleCfg := nowhere.BundleOptions{
 		TCP: tcpCfg, Credentials: credentials, ALPN: alpn, Observer: nowhere.MihomoObserver{},
-		PoolSize: poolSize, PrewarmOnStart: option.PrewarmOnStart,
-		Up: nowhereCarrier(up), Down: nowhereCarrier(down),
+		PoolSize: policy.PoolSize, PrewarmOnStart: option.PrewarmOnStart,
+		Up: policy.UpCarrier(), Down: policy.DownCarrier(),
+		MixUp: policy.MixUp, MixDown: policy.MixDown,
+		MixFallbackTimeout: policy.MixFallbackTimeout,
+		Mux:                policy.Mux,
 	}
-	if up == "udp" || down == "udp" {
+	if policy.UsesQUIC {
 		bundleCfg.QUIC = nowhere.NewQuicBackend(quicCfg)
 	}
 	bundle, err := nowhere.NewCarrierBundle(bundleCfg)
@@ -499,33 +500,6 @@ func (t *vmessTLSDialer) DialTLSConn(ctx context.Context, c net.Conn) (nowhere.H
 		},
 	}, nil
 }
-
-func nowhereCarrier(value string) nowhere.Carrier {
-	if value == "tcp" {
-		return nowhere.CarrierTLSTCP
-	}
-	return nowhere.CarrierQUIC
-}
-
-// resolveCarriers validates and resolves the up/down carrier selectors.
-// When neither is set both default to "udp".
-func (o NowhereOption) resolveCarriers() (up, down string, err error) {
-	switch {
-	case o.Up != "" && o.Down != "":
-		up, down = o.Up, o.Down
-	case o.Up != "" || o.Down != "":
-		// Setting only one of up/down is ambiguous; reject rather than guess.
-		return "", "", fmt.Errorf("nowhere %s: up and down must be set together", o.Name)
-	default:
-		up, down = "udp", "udp"
-	}
-	if !validCarrier(up) || !validCarrier(down) {
-		return "", "", fmt.Errorf("nowhere %s: invalid carrier (up=%q down=%q, must be tcp or udp)", o.Name, up, down)
-	}
-	return up, down, nil
-}
-
-func validCarrier(s string) bool { return s == "tcp" || s == "udp" }
 
 const defaultNowhereALPN = "now/1"
 

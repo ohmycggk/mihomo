@@ -1,8 +1,9 @@
-// Package nowhere bridges the Nowhere 1.7 Portal implementation from
+// Package nowhere bridges the Nowhere 1.8 Portal implementation from
 // github.com/ohmycggk/nowhere-go/server into Mihomo's inbound listener
 // framework: authenticated TCP streams and UDP packet flows are handed to the
 // tunnel exactly like any other protocol inbound, or — with a next section —
-// forwarded to another Nowhere Portal (native Portal chaining).
+// forwarded to another Nowhere Portal (native Portal chaining). Inbound TLS
+// auto-detects dedicated vs marked Mux lanes after AuthFrame.
 package nowhere
 
 import (

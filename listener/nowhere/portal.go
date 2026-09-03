@@ -38,7 +38,7 @@ import (
 // taking ownership, so close the Server using the Upstream first and the
 // bundle second.
 func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, cwnd int) (*nwserver.PortalUpstream, *nwtransport.CarrierBundle, error) {
-	up, down, poolSize, err := resolvePortalNext(next)
+	policy, err := resolvePortalNext(next)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -65,10 +65,15 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 
 	bundleCfg := nwtransport.BundleOptions{
 		Credentials: credentials, ALPN: alpn, Observer: nwtransport.MihomoObserver{},
-		PoolSize: poolSize,
-		Up:       portalCarrier(up), Down: portalCarrier(down),
+		PoolSize:           policy.PoolSize,
+		Up:                 policy.UpCarrier(),
+		Down:               policy.DownCarrier(),
+		MixUp:              policy.MixUp,
+		MixDown:            policy.MixDown,
+		MixFallbackTimeout: policy.MixFallbackTimeout,
+		Mux:                policy.Mux,
 	}
-	if up == "udp" || down == "udp" {
+	if policy.UsesQUIC {
 		tlsConfig, err := portalQUICTLSConfig(serverName, alpn, skipCertVerify, next.Pin)
 		if err != nil {
 			return nil, nil, err
@@ -95,7 +100,7 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 			Observer:   nwtransport.MihomoObserver{},
 		})
 	}
-	if up == "tcp" || down == "tcp" {
+	if policy.UsesTCP {
 		tlsConfig := portalTCPTLSConfig(serverName, alpn, skipCertVerify)
 		var tlsDialer nwtransport.TLSDialer = &vmessTLSDialer{cfg: tlsConfig}
 		if next.Pin != "" {
@@ -124,64 +129,47 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 	return portalUpstream, bundle, nil
 }
 
-// resolvePortalNext validates the next section and resolves carrier and pool
-// defaults, mirroring the outbound's resolveCarriers/pool rules
-// (adapter/outbound/nowhere.go).
-func resolvePortalNext(next *LC.NowhereNext) (up, down string, poolSize int, err error) {
+// resolvePortalNext validates the next section and resolves carrier, mux, and
+// pool defaults, mirroring the outbound's ResolveRoutePolicy rules.
+func resolvePortalNext(next *LC.NowhereNext) (nwtransport.RoutePolicy, error) {
 	// Rust contract (vector/config.rs): the literal "none" is an alias for an
 	// omitted sni/pin; normalize in place so a directly constructed
 	// LC.NowhereServer (bypassing the inbound option layer) behaves the same.
 	next.SNI = normalizePortalNone(next.SNI)
 	next.Pin = normalizePortalNone(next.Pin)
 	if next.Server == "" {
-		return "", "", 0, errors.New("nowhere: next: missing server")
+		return nwtransport.RoutePolicy{}, errors.New("nowhere: next: missing server")
 	}
 	// Rust parses the port as u16.
 	if next.Port <= 0 || next.Port > 65535 {
-		return "", "", 0, fmt.Errorf("nowhere: next: invalid port %d", next.Port)
+		return nwtransport.RoutePolicy{}, fmt.Errorf("nowhere: next: invalid port %d", next.Port)
 	}
 	if next.Password == "" {
-		return "", "", 0, errors.New("nowhere: next: missing password")
+		return nwtransport.RoutePolicy{}, errors.New("nowhere: next: missing password")
 	}
-	switch {
-	case next.Up != "" && next.Down != "":
-		up, down = next.Up, next.Down
-	case next.Up != "" || next.Down != "":
-		// Setting only one of up/down is ambiguous; reject rather than guess.
-		return "", "", 0, errors.New("nowhere: next: up and down must be set together")
-	default:
-		up, down = "udp", "udp"
-	}
-	if !validPortalCarrier(up) || !validPortalCarrier(down) {
-		return "", "", 0, fmt.Errorf("nowhere: next: invalid carrier (up=%q down=%q, must be tcp or udp)", up, down)
-	}
-	// Pool defaults: tcp/tcp -> 5 (warm pool on); any matrix containing UDP ->
-	// 0 (the warm pool only applies to TLS/TCP and only the symmetric tcp/tcp
-	// matrix keeps lanes warm). An explicit 0 disables warming.
-	if up == "tcp" && down == "tcp" {
-		if next.Pool == nil {
-			poolSize = nwtransport.DefaultPoolSize
-		} else if *next.Pool < 0 {
-			return "", "", 0, fmt.Errorf("nowhere: next: invalid pool %d (must be >= 0)", *next.Pool)
-		} else if *next.Pool > nwtransport.MaxPoolSize {
-			log.Warnln("[Nowhere] next pool %d exceeds maximum %d; using %d", *next.Pool, nwtransport.MaxPoolSize, nwtransport.MaxPoolSize)
-			poolSize = nwtransport.MaxPoolSize
-		} else {
-			poolSize = *next.Pool
-		}
-	} else if next.Pool != nil && *next.Pool != 0 {
-		// Rust v1.7 ignores pool entirely outside tcp/tcp.
-		log.Warnln("[Nowhere] next pool is only effective for tcp/tcp; ignoring configured value %d", *next.Pool)
+	policy, err := nwtransport.ResolveRoutePolicy(nwtransport.RouteInputs{
+		Prefix:             "nowhere: next",
+		Up:                 next.Up,
+		Down:               next.Down,
+		Pool:               next.Pool,
+		Mux:                next.Mux,
+		MixFallbackTimeout: next.MixFallbackTimeout,
+		Warn: func(format string, args ...any) {
+			log.Warnln("[Nowhere] next "+format, args...)
+		},
+	})
+	if err != nil {
+		return nwtransport.RoutePolicy{}, err
 	}
 	if next.SNI != "" && !validPortalSNI(next.SNI) {
-		return "", "", 0, errors.New("nowhere: next: sni must be an ASCII DNS name")
+		return nwtransport.RoutePolicy{}, errors.New("nowhere: next: sni must be an ASCII DNS name")
 	}
 	if next.Pin != "" {
 		if _, err := nwtransport.ParseCertificatePin(next.Pin); err != nil {
-			return "", "", 0, fmt.Errorf("nowhere: next: %w", err)
+			return nwtransport.RoutePolicy{}, fmt.Errorf("nowhere: next: %w", err)
 		}
 	}
-	return up, down, poolSize, nil
+	return policy, nil
 }
 
 // normalizePortalNone maps the Rust "none" sentinel for sni/pin onto the
@@ -210,15 +198,6 @@ func validPortalSNI(sni string) bool {
 	}
 	return true
 }
-
-func portalCarrier(value string) nwtransport.Carrier {
-	if value == "tcp" {
-		return nwtransport.CarrierTLSTCP
-	}
-	return nwtransport.CarrierQUIC
-}
-
-func validPortalCarrier(s string) bool { return s == "tcp" || s == "udp" }
 
 // portalQUICTLSConfig mirrors the outbound's QUIC TLS policy: TLS 1.3 with the
 // shared one-ALPN profile; pin overrides SNI/chain verification.

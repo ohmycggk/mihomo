@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/metacubex/mihomo/adapter/outbound"
 	C "github.com/metacubex/mihomo/constant"
 	IN "github.com/metacubex/mihomo/listener/inbound"
 	nwtransport "github.com/metacubex/mihomo/transport/nowhere"
@@ -133,6 +134,9 @@ func TestNowhereNextValidation(t *testing.T) {
 			n.Up, n.Down, n.Pool = "tcp", "tcp", intPointer(nwtransport.MaxPoolSize+1)
 		}, ""},
 		{"udp pool negative ignored", func(n *IN.NowhereNextOption) { n.Up, n.Down, n.Pool = "udp", "udp", intPointer(-1) }, ""},
+		{"mix accepted", func(n *IN.NowhereNextOption) { n.Up, n.Down = "mix", "mix" }, ""},
+		{"mux=1 tcp/tcp", func(n *IN.NowhereNextOption) { n.Up, n.Down, n.Mux = "tcp", "tcp", intPointer(1) }, ""},
+		{"invalid mux", func(n *IN.NowhereNextOption) { n.Mux = intPointer(2) }, "invalid mux"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,4 +208,72 @@ func TestNowhereInboundChainDefaultTLS(t *testing.T) {
 	t.Run("tcp echo", func(t *testing.T) { testTCPEcho(t, client) })
 	t.Run("udp echo", func(t *testing.T) { testUDPEcho(t, client) })
 	assertTunnelUnused(t, tunnel)
+}
+
+func TestNowhereInboundMuxAndMix(t *testing.T) {
+	originPort := startTestServer(t)
+	muxOne := 1
+
+	t.Run("client mux tcp/tcp", func(t *testing.T) {
+		client, err := outbound.NewNowhere(outbound.NowhereOption{
+			Name: "nowhere-test-mux", Server: "127.0.0.1", Port: originPort,
+			Password: testPassword, SkipCertVerify: true,
+			Up: "tcp", Down: "tcp", Mux: &muxOne, UDP: true,
+		})
+		if err != nil {
+			t.Fatalf("NewNowhere mux: %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		testTCPEcho(t, client)
+		testUDPEcho(t, client)
+	})
+
+	t.Run("client mix/mix", func(t *testing.T) {
+		client := newTestClient(t, originPort, "mix", "mix")
+		testTCPEcho(t, client)
+		testUDPEcho(t, client)
+	})
+
+	t.Run("next mux tcp/tcp", func(t *testing.T) {
+		tunnel := &countingTunnel{}
+		relay, err := IN.NewNowhere(&IN.NowhereOption{
+			BaseOption:           IN.BaseOption{NameStr: "nowhere-test-relay-mux", Listen: "127.0.0.1", Port: "0"},
+			Password:             testPassword,
+			Certificate:          testCertificate,
+			PrivateKey:           testPrivateKey,
+			ALPN:                 []string{"now/1"},
+			CongestionController: "bbr",
+			Next: &IN.NowhereNextOption{
+				Server: "127.0.0.1", Port: originPort, Password: testPassword,
+				Up: "tcp", Down: "tcp", Mux: &muxOne, Pin: testNextPin,
+			},
+		})
+		if err != nil {
+			t.Fatalf("inbound.NewNowhere mux next: %v", err)
+		}
+		if err := relay.Listen(tunnel); err != nil {
+			t.Fatalf("relay Listen: %v", err)
+		}
+		t.Cleanup(func() { _ = relay.Close() })
+		_, portStr, err := net.SplitHostPort(relay.Address())
+		if err != nil {
+			t.Fatalf("SplitHostPort: %v", err)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			t.Fatalf("port: %v", err)
+		}
+		client := newTestClient(t, port, "tcp", "tcp")
+		testTCPEcho(t, client)
+		testUDPEcho(t, client)
+		assertTunnelUnused(t, tunnel)
+	})
+
+	t.Run("next mix/mix", func(t *testing.T) {
+		relayPort, tunnel := startRelayServer(t, originPort, "mix", "mix", testNextPin)
+		client := newTestClient(t, relayPort, "udp", "udp")
+		testTCPEcho(t, client)
+		testUDPEcho(t, client)
+		assertTunnelUnused(t, tunnel)
+	})
 }

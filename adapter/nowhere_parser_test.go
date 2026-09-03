@@ -75,4 +75,12 @@ func TestParseNowhereProxy(t *testing.T) {
 	if udpDisabled.SupportUDP() {
 		t.Fatalf("SupportUDP = true, want false when udp: false")
 	}
+
+	mixMapping := map[string]any{
+		"type": "nowhere", "name": "nw-mix", "server": "example.com",
+		"port": 2077, "password": "secret", "up": "mix", "down": "mix", "mux": 1,
+	}
+	if _, err := ParseProxy(mixMapping); err != nil {
+		t.Fatalf("ParseProxy mix/mux: %v", err)
+	}
 }
