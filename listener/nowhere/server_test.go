@@ -51,7 +51,7 @@ func startTestServerWith(t *testing.T, certificate, privateKey string) int {
 		Password:             testPassword,
 		Certificate:          certificate,
 		PrivateKey:           privateKey,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 	}, inbound.NewListenConfig(), fakeTunnel{})
 	if err != nil {
@@ -183,7 +183,7 @@ func TestNowhereInboundSelfSigned(t *testing.T) {
 		Enable:               true,
 		Listen:               "127.0.0.1:0",
 		Password:             testPassword,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 	}, inbound.NewListenConfig(), fakeTunnel{})
 	if err != nil {
@@ -226,8 +226,8 @@ func TestParseListenerNowhere(t *testing.T) {
 	if !ok {
 		t.Fatalf("Config() = %T, want *inbound.NowhereOption", parsed.Config())
 	}
-	if len(option.ALPN) != 1 || option.ALPN[0] != "now/1" {
-		t.Fatalf("ALPN = %v, want [now/1]", option.ALPN)
+	if len(option.ALPN) != 1 || option.ALPN[0] != "nw2" {
+		t.Fatalf("ALPN = %v, want [nw2]", option.ALPN)
 	}
 	if option.CongestionController != "bbr" {
 		t.Fatalf("CongestionController = %q, want bbr", option.CongestionController)

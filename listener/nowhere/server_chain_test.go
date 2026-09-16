@@ -59,7 +59,7 @@ func startRelayServer(t *testing.T, originPort int, up, down, pin string) (int, 
 		Password:             testPassword,
 		Certificate:          testCertificate,
 		PrivateKey:           testPrivateKey,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 		Next: &IN.NowhereNextOption{
 			Server:   "127.0.0.1",
@@ -241,7 +241,7 @@ func TestNowhereInboundMuxAndMix(t *testing.T) {
 			Password:             testPassword,
 			Certificate:          testCertificate,
 			PrivateKey:           testPrivateKey,
-			ALPN:                 []string{"now/1"},
+			ALPN:                 []string{"nw2"},
 			CongestionController: "bbr",
 			Next: &IN.NowhereNextOption{
 				Server: "127.0.0.1", Port: originPort, Password: testPassword,

@@ -208,10 +208,10 @@ func TestNormalizeNowhereALPN(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "omitted defaults", want: defaultNowhereALPN},
-		{name: "explicit protocol", input: []string{"now/1"}, want: "now/1"},
+		{name: "explicit protocol", input: []string{"nw2"}, want: "nw2"},
 		{name: "empty list", input: []string{}, wantErr: true},
 		{name: "empty protocol", input: []string{""}, wantErr: true},
-		{name: "multiple protocols", input: []string{"now/1", "h3"}, wantErr: true},
+		{name: "multiple protocols", input: []string{"nw2", "h3"}, wantErr: true},
 		{name: "overlong protocol", input: []string{strings.Repeat("x", 256)}, wantErr: true},
 	}
 

@@ -2374,13 +2374,13 @@ listeners:
     #    madSJjYQIf9o1N5GXjkW4DEEeb17qMxHdwMdNnwADAABAAEAAQACAAEAAwAIdGVz
     #    dC5jb20AAA==
     #    -----END ECH KEYS-----
-    #  alpn: # 只能填写一个值
-    #    - now/1
+    #  alpn: # 只能填写一个值；省略用协议默认 nw2（Nowhere 2 唯一标准 ALPN，无法与 1.8 now/1 互通）
+    #    - nw2
     #  congestion-controller: bbr
     #  cwnd: 32
     # 以下可选：填写 next 后启用 Portal 链式转发，将全部入站流量转发至下一个 Nowhere Portal，
     # 并跳过 mihomo 的路由/规则（rule、proxy、rules 对该监听器均不生效）；
-    # 转发连接的 alpn 与 congestion-controller/cwnd 继承自上述监听配置；链上每个 Portal 必须运行 Nowhere >= 1.7
+    # 转发连接的 alpn 与 congestion-controller/cwnd 继承自上述监听配置；链上每个 Portal 必须运行 Nowhere 2.0（ALPN nw2）
     #  next:
     #    server: origin.example # 必填，下一跳 Portal 地址
     #    port: 2080 # 必填，下一跳 Portal 端口（1-65535）

@@ -334,7 +334,7 @@ func TestConvertsV2RayVmessBase64HTTPRemappedToH2Transport(t *testing.T) {
 // Anywhere's ProxyConfiguration+URLParsing.parseNowhere.
 func TestConvertsV2RayNowhere(t *testing.T) {
 	// key=secret, up=down=tcp, pool=3, with SNI/ALPN/insecure/ECH.
-	link := "nowhere://secret@example.com:2077?up=tcp&down=tcp&sni=real.example.com&alpn=now%2F1&pool=3&insecure=1&ech=ABCD1234#nw"
+	link := "nowhere://secret@example.com:2077?up=tcp&down=tcp&sni=real.example.com&alpn=nw2&pool=3&insecure=1&ech=ABCD1234#nw"
 
 	expected := []map[string]any{
 		{
@@ -347,7 +347,7 @@ func TestConvertsV2RayNowhere(t *testing.T) {
 			"up":               "tcp",
 			"down":             "tcp",
 			"sni":              "real.example.com",
-			"alpn":             []string{"now/1"},
+			"alpn":             []string{"nw2"},
 			"pool":             3,
 			"skip-cert-verify": true,
 			"ech-opts": map[string]any{
@@ -379,7 +379,7 @@ func TestConvertsV2RayNowhereIgnoresLegacyNet(t *testing.T) {
 }
 
 func TestConvertsV2RayNowhereRejectsMultipleALPN(t *testing.T) {
-	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?alpn=now/1,h3#invalid-alpn"))
+	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?alpn=nw2,h3#invalid-alpn"))
 	assert.Error(t, err)
 	assert.Empty(t, proxies)
 }
