@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/ohmycggk/nowhere-go/carrier/dialgate"
+	"github.com/metacubex/mihomo/transport/nowhere/core/carrier/dialgate"
 )
 
 // Client caches one handshaked Session per proxy behind a coalescing dial gate.

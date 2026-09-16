@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/transport/tuic/common"
-	"github.com/ohmycggk/nowhere-go/diagnostic"
+	"github.com/metacubex/mihomo/transport/nowhere/core/diagnostic"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"

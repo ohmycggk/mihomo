@@ -3,7 +3,7 @@ package nowhere
 import (
 	"context"
 
-	"github.com/ohmycggk/nowhere-go/diagnostic"
+	"github.com/metacubex/mihomo/transport/nowhere/core/diagnostic"
 )
 
 type MihomoObserver struct{}
