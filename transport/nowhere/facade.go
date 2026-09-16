@@ -1,14 +1,14 @@
 // Package nowhere is the Mihomo host facade for Nowhere outbound.
-// Shared protocol core lives in github.com/ohmycggk/nowhere-go;
+// Shared protocol core lives in github.com/metacubex/mihomo/transport/nowhere/core;
 // this package keeps the platform QUIC backend and thin type aliases.
 package nowhere
 
 import (
 	"net/netip"
 
-	"github.com/ohmycggk/nowhere-go/bundle"
-	"github.com/ohmycggk/nowhere-go/carrier/tcptls"
-	"github.com/ohmycggk/nowhere-go/wire"
+	"github.com/metacubex/mihomo/transport/nowhere/core/bundle"
+	"github.com/metacubex/mihomo/transport/nowhere/core/carrier/tcptls"
+	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
 
 	quicpkg "github.com/metacubex/mihomo/transport/nowhere/carrier/quic"
 )

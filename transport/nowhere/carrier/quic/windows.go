@@ -1,6 +1,6 @@
 package quic
 
-import corequic "github.com/ohmycggk/nowhere-go/carrier/quic"
+import corequic "github.com/metacubex/mihomo/transport/nowhere/core/carrier/quic"
 
 // Re-export Nowhere 1.5.2 recommended QUIC windows for the Mihomo backend.
 const (

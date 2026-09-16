@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/metacubex/quic-go"
-	"github.com/ohmycggk/nowhere-go/carrier/quic/conformance"
-	"github.com/ohmycggk/nowhere-go/wire"
+	"github.com/metacubex/mihomo/transport/nowhere/core/carrier/quic/conformance"
+	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
 )
 
 func TestOutboundSessionConformance(t *testing.T) {

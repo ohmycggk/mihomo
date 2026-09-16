@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ohmycggk/nowhere-go/bundle"
+	"github.com/metacubex/mihomo/transport/nowhere/core/bundle"
 )
 
 // RouteInputs is the host-facing carrier/mux/pool policy before it is mapped

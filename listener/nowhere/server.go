@@ -1,5 +1,5 @@
 // Package nowhere bridges the Nowhere 1.8 Portal implementation from
-// github.com/ohmycggk/nowhere-go/server into Mihomo's inbound listener
+// github.com/metacubex/mihomo/transport/nowhere/core/server into Mihomo's inbound listener
 // framework: authenticated TCP streams and UDP packet flows are handed to the
 // tunnel exactly like any other protocol inbound, or — with a next section —
 // forwarded to another Nowhere Portal (native Portal chaining). Inbound TLS
@@ -28,8 +28,8 @@ import (
 	nwtransport "github.com/metacubex/mihomo/transport/nowhere"
 	"github.com/metacubex/mihomo/transport/tuic/common"
 
-	nwserver "github.com/ohmycggk/nowhere-go/server"
-	"github.com/ohmycggk/nowhere-go/wire"
+	nwserver "github.com/metacubex/mihomo/transport/nowhere/core/server"
+	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"

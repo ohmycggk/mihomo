@@ -12,7 +12,7 @@ import (
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"
-	"github.com/ohmycggk/nowhere-go/wire"
+	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
 )
 
 const rustPortalConformanceEnv = "NOWHERE_RUST_PORTAL_ADDR"
