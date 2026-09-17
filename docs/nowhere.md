@@ -15,7 +15,7 @@ Nowhere 2 的唯一 ALPN 是 `nw2`。认证盐、Mux 帧与 QUIC UDP 头均已�
 | **1.7** | FLOW 高 3 位为 HOPS；原生 Portal 链式转发（`next`）。直连客户端发 HOPS=0。 |
 | **1.8** | TLS Mux：AuthFrame 后 `0xff` 进入 Mux 分片。`mux=0` 专用通道客户端仍可对接 1.8 Portal。 |
 | **1.8.3** | 客户端 `mix` 策略（`up`/`down` = `tcp` \| `udp` \| `mix`）。数据面与 1.8.2 相同。 |
-| **2.0** | ALPN 固定 `nw2`；AuthFrame 盐改为 `nowhere/nw2/auth-root`；Mux 改为 7 字节 OPEN/DATA/WINDOW/FIN/RESET；QUIC UDP 头压缩；flow ID 为 30 位（`1..=0x3fffffff`）。与 1.8 不互通。 |
+| **2.0** | ALPN 固定 `nw2`；AuthFrame 盐改为 `nowhere/nw2/auth-root`；Mux 改为 7 字节 OPEN/DATA/WINDOW/FIN/RESET；QUIC UDP 头压缩；flow ID 为 30 位（`1..=0x3fffffff`）。可选 Morph（`morph=1`）在 TLS/QUIC 之下做 keyed transform。与 1.8 不互通。 |
 
 ## 最小配置
 
@@ -88,8 +88,16 @@ proxies:
 | `congestion-controller` | `bbr` | QUIC 拥塞控制 |
 | `cwnd` | `32` | 拥塞窗口初值 |
 | `udp` | `true` | 是否处理 UDP；配置文件省略该键时默认为 `true` |
+| `morph` | `false` | 官方 CLI `morph=1`：在 TLS/QUIC 之下用本跳 `password` 做 keyed transform。YAML `true`/`1` 启用，省略/`false`/`0` 为裸 TLS/QUIC。协议不协商，对端必须同样开启 |
 
-YAML 目前**不**暴露官方命令行里的 `morph`。未启用时等价 `morph=0`（裸 TLS/QUIC）；无法与 `morph=1` 的官方 Portal / Vector 对端互通。
+### Morph（`morph: true`）
+
+对应官方 CLI 的 `morph=1`：在 TLS/QUIC 握手与载荷之下，用本跳共享密钥派生的 ChaCha20 密钥流做 XOR。协议不协商——两端必须同时开或同时关，否则无法完成握手。可与官方 `morph=1` 的 Portal / Vector 互通。
+
+- TLS/TCP：客户端先写 12 字节 nonce，再变换 TLS 字节流。
+- QUIC/UDP：每个数据报带独立 12 字节 nonce，再变换 QUIC 报文。
+- 密钥由本跳 `password` 派生（入站 `next` 则由 `next.password` 派生）。
+- 与 `up` / `down` / `mux` 正交：四种固定矩阵与 mix 均可启用。
 
 ### TLS Mux（`mux=1`）
 
@@ -243,6 +251,20 @@ proxies:
 
 `alpn` 必须且只能含一个值；`alpn: []`、多个值或空串都会启动报错。官方 Rust Portal 只协商 `nw2`，自定义 ALPN 仅在两端 mihomo（或同等实现）一致时可用。
 
+### Morph
+
+```yaml
+proxies:
+  - name: "nw-morph"
+    type: nowhere
+    server: example.com
+    port: 2077
+    password: secret
+    morph: true
+```
+
+服务端入站也必须 `morph: true`（或 `morph: 1`）。只开一端无法握手。
+
 ### 链式代理
 
 ```yaml
@@ -257,7 +279,7 @@ proxies:
 
 ## 入站（Portal）
 
-入站同时监听 TLS/TCP 与 QUIC/UDP（同端口），认证后把 TCP/UDP 交给隧道。省略证书时生成内存自签证书，客户端需 `skip-cert-verify` 或 `pin`。AuthFrame 后自动识别专用通道与 Mux，入站无需 `mux` 字段。
+入站同时监听 TLS/TCP 与 QUIC/UDP（同端口），认证后把 TCP/UDP 交给隧道。省略证书时生成内存自签证书，客户端需 `skip-cert-verify` 或 `pin`。AuthFrame 后自动识别专用通道与 Mux，入站无需 `mux` 字段。`morph` 须与客户端一致。
 
 ```yaml
 listeners:
@@ -270,6 +292,7 @@ listeners:
     # alpn: [nw2]
     # congestion-controller: bbr
     # cwnd: 32
+    # morph: true              # 官方 CLI morph=1；客户端必须同样开启
 ```
 
 ### Portal 链式转发（`next`，1.7+）
@@ -293,6 +316,7 @@ listeners:
       # mix-fallback-timeout: 1
       sni: origin.example
       pin: <leaf cert sha256 hex>
+      # morph: true           # 省略则继承监听器 morph
 ```
 
 | 字段 | 默认 | 说明 |
@@ -304,26 +328,28 @@ listeners:
 | `next.mix-fallback-timeout` | `1`（秒） | mix 主路由准备超时 |
 | `next.sni` | — | 省略 / 空 / `none` 关闭证书链与域名校验（域名形式的 `server` 仍可作为 ClientHello SNI）；显式 DNS 名启用系统根证书校验 |
 | `next.pin` | — | 叶证书 SHA-256；非空且非 `none` 时优先于 `sni` |
+| `next.morph` | 继承监听器 | 下一跳是否启用 Morph；省略时继承本监听器的 `morph`（与官方 `portal://...?morph=1&next=...` 一致）。密钥由 `next.password` 派生 |
 
 跳数预算：链上第一个转发 Portal 将 HOPS 初始化为 7，每跳减 1；HOPS=1 仍要继续转发时以 `FLOW_LIMIT` 拒绝。转发连接的 ALPN 与 QUIC 拥塞参数继承自该监听器。
 
 ## share-link 导入
 
 ```
-nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&sni=...&alpn=nw2&pool=0..256&insecure=0|1&fp=<sha256>&pin=<sha256>&ech=<base64>#name
+nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&morph=0|1&sni=...&alpn=nw2&pool=0..256&insecure=0|1&fp=<sha256>&pin=<sha256>&ech=<base64>#name
 ```
 
 - URL username 为共享 key，导入为 `password`；**带 password 段的链接会被丢弃**。
 - 省略端口时导入为 `port: 443`；导入结果固定带 `udp: true`。
 - `up` / `down` 必须同时出现或同时缺省；单边设置拒绝导入，都省略时默认 udp/udp。载体只能是 `tcp`、`udp` 或 `mix`。
 - `mux=1` 写入配置；`udp/udp&mux=1` 规范为 0 且不写出 `mux`。非法 `mux` 拒绝导入。
+- `morph=1` 写入 `morph: true`；`morph=0` 或省略不写出该字段（默认裸 TLS/QUIC）。非法值拒绝导入。
 - `alpn` 出现时必须恰好一个值，且非空、不超过 255 字节、不含逗号，否则整条链接拒绝。省略时出站使用协议默认 `nw2`。官方 Portal 只接受 `nw2`。
 - `pool` 仅在专用（`mux=0`）tcp/tcp 矩阵导入，超过 256 告警并钳制为 256；含 UDP/`mix` 或 `mux=1` 时忽略非零 pool 并告警。
 - `insecure=1` → `skip-cert-verify: true`；`fp=` → `fingerprint`。
 - `pin=none` 或空值忽略，其它值写入 `pin` 字段。
 - `ech=` → `ech-opts: {enable: true, config: <value>}`。
 - 旧别名 `net=` / `spec=` / `key=` 不再识别。
-- `mix-fallback-timeout`、风暴抑制字段（`max-concurrent-dials`、`warm-backoff-*`、`prewarm-on-start`）以及官方 URL 里的 `morph` 目前仅配置文件 / 官方 CLI 支持，不经 share-link 导入。
+- `mix-fallback-timeout`、风暴抑制字段（`max-concurrent-dials`、`warm-backoff-*`、`prewarm-on-start`）目前仅配置文件支持，不经 share-link 导入。
 
 ## 兼容性
 
@@ -333,5 +359,5 @@ nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&sni=...&alpn=n
 - 对称矩阵可对接任意单载体或 mix 入站；非对称与 `mix` 必须 mix。
 - 直连出站发送 HOPS=0；原生 `next` 链要求全部 Portal 均为 Nowhere 2.0。
 - 本仓 mihomo 同时提供出站与入站。
-- 旧配置省略新字段时自动启用安全默认值（`udp/udp`、`mux=0`、`alpn=nw2`、专用 tcp/tcp 的 `pool=5`）；负数或 `warm-backoff-initial > warm-backoff-max` 会在启动时失败。
-- YAML 未暴露 `morph`：当前始终按 `morph=0` 运行。
+- 旧配置省略新字段时自动启用安全默认值（`udp/udp`、`mux=0`、`alpn=nw2`、`morph=0`、专用 tcp/tcp 的 `pool=5`）；负数或 `warm-backoff-initial > warm-backoff-max` 会在启动时失败。
+- **Morph**：YAML `true`/`1` 与 share-link `morph=1` 启用；省略/`false`/`0` 为裸 TLS/QUIC。对端必须使用相同设置，协议不协商。入站 `next.morph` 省略时继承监听器。
