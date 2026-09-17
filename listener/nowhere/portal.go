@@ -94,7 +94,7 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 				InitialConnectionReceiveWindow: nwtransport.RecommendedConnectionReceiveWindow,
 				MaxConnectionReceiveWindow:     nwtransport.RecommendedConnectionReceiveWindow,
 			},
-			Dialer:     portalDialer,
+			Dialer:     nwtransport.WrapMorphPacketDialer(portalDialer, string(nwtransport.MorphSharedKey(next.Morph, next.Password))),
 			Congestion: congestionController,
 			CWND:       cwnd,
 			Observer:   nwtransport.MihomoObserver{},
@@ -112,6 +112,7 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 			Dialer:         portalDialer,
 			TLSDialer:      tlsDialer,
 			Observer:       nwtransport.MihomoObserver{},
+			MorphSharedKey: nwtransport.MorphSharedKey(next.Morph, next.Password),
 		})
 		if err != nil {
 			return nil, nil, err

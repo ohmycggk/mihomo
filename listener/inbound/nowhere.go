@@ -14,14 +14,18 @@ import (
 
 type NowhereOption struct {
 	BaseOption
-	Password             string             `inbound:"password"`
-	Certificate          string             `inbound:"certificate,omitempty"`
-	PrivateKey           string             `inbound:"private-key,omitempty"`
-	EchKey               string             `inbound:"ech-key,omitempty"`
-	ALPN                 []string           `inbound:"alpn,omitempty"`
-	CongestionController string             `inbound:"congestion-controller,omitempty"`
-	CWND                 int                `inbound:"cwnd,omitempty"`
-	Next                 *NowhereNextOption `inbound:"next,omitempty"`
+	Password             string   `inbound:"password"`
+	Certificate          string   `inbound:"certificate,omitempty"`
+	PrivateKey           string   `inbound:"private-key,omitempty"`
+	EchKey               string   `inbound:"ech-key,omitempty"`
+	ALPN                 []string `inbound:"alpn,omitempty"`
+	CongestionController string   `inbound:"congestion-controller,omitempty"`
+	CWND                 int      `inbound:"cwnd,omitempty"`
+	// Morph enables the Nowhere 2 keyed socket transform below TLS/QUIC
+	// (official CLI morph=1). YAML true/1 enable it; omitted/false/0 is morph=0.
+	// There is no negotiation: the client must use the same setting.
+	Morph bool               `inbound:"morph,omitempty"`
+	Next  *NowhereNextOption `inbound:"next,omitempty"`
 }
 
 // NowhereNextOption is the next-hop Portal for native Portal chaining
@@ -55,6 +59,9 @@ type NowhereNextOption struct {
 	// set (non-empty, non-"none") it overrides SNI/chain verification, like
 	// the outbound's pin.
 	Pin string `inbound:"pin,omitempty"`
+	// Morph overrides Morph towards the next Portal. Nil inherits the
+	// listener morph flag (official portal:// morph=1 controls both hops).
+	Morph *bool `inbound:"morph,omitempty"`
 }
 
 func (o NowhereOption) Equal(config C.InboundConfig) bool {
@@ -109,7 +116,8 @@ func NewNowhere(options *NowhereOption) (*Nowhere, error) {
 			ALPN:                 options.ALPN,
 			CongestionController: options.CongestionController,
 			CWND:                 options.CWND,
-			Next:                 nowhereNextConfig(options.Next),
+			Morph:                options.Morph,
+			Next:                 nowhereNextConfig(options.Next, options.Morph),
 		},
 	}, nil
 }
@@ -190,9 +198,13 @@ func validNowhereSNI(sni string) bool {
 // nowhereNextConfig maps the inbound next option onto the listener server
 // config; nil stays nil (direct tunnel upstream). sni/pin are normalized so
 // NowhereNext stores the effective values ("none" means unset).
-func nowhereNextConfig(o *NowhereNextOption) *LC.NowhereNext {
+func nowhereNextConfig(o *NowhereNextOption, inboundMorph bool) *LC.NowhereNext {
 	if o == nil {
 		return nil
+	}
+	morph := inboundMorph
+	if o.Morph != nil {
+		morph = *o.Morph
 	}
 	return &LC.NowhereNext{
 		Server:             o.Server,
@@ -205,6 +217,7 @@ func nowhereNextConfig(o *NowhereNextOption) *LC.NowhereNext {
 		MixFallbackTimeout: o.MixFallbackTimeout,
 		SNI:                normalizeNowhereNone(o.SNI),
 		Pin:                normalizeNowhereNone(o.Pin),
+		Morph:              morph,
 	}
 }
 

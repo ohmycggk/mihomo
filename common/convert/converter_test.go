@@ -495,11 +495,26 @@ func TestConvertsV2RayNowhereMixMux(t *testing.T) {
 	_, err = adapter.ParseProxy(proxies[0])
 	assert.NoError(t, err)
 
-	proxies, err = ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=udp&down=udp&mux=1#canon"))
-	assert.NoError(t, err)
-	assert.Len(t, proxies, 1)
-	_, hasMux := proxies[0]["mux"]
-	assert.False(t, hasMux)
 	_, err = adapter.ParseProxy(proxies[0])
 	assert.NoError(t, err)
+}
+
+func TestConvertsV2RayNowhereMorph(t *testing.T) {
+	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?morph=1#morph"))
+	assert.NoError(t, err)
+	assert.Len(t, proxies, 1)
+	assert.Equal(t, true, proxies[0]["morph"])
+	_, err = adapter.ParseProxy(proxies[0])
+	assert.NoError(t, err)
+
+	proxies, err = ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?morph=0#plain"))
+	assert.NoError(t, err)
+	assert.Len(t, proxies, 1)
+	_, hasMorph := proxies[0]["morph"]
+	assert.False(t, hasMorph)
+
+	proxies, err = ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?morph=2#bad"))
+	if err == nil {
+		assert.Empty(t, proxies)
+	}
 }

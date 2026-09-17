@@ -83,4 +83,12 @@ func TestParseNowhereProxy(t *testing.T) {
 	if _, err := ParseProxy(mixMapping); err != nil {
 		t.Fatalf("ParseProxy mix/mux: %v", err)
 	}
+
+	morphMapping := map[string]any{
+		"type": "nowhere", "name": "nw-morph", "server": "example.com",
+		"port": 2077, "password": "secret", "morph": 1,
+	}
+	if _, err := ParseProxy(morphMapping); err != nil {
+		t.Fatalf("ParseProxy morph: %v", err)
+	}
 }

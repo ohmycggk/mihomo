@@ -71,8 +71,9 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 		return nil, err
 	}
 	serverConfig, err := nwserver.NewConfig(nwserver.ConfigOptions{
-		Credentials: credentials,
-		ALPN:        alpn,
+		Credentials:    credentials,
+		ALPN:           alpn,
+		MorphSharedKey: nwtransport.MorphSharedKey(config.Morph, config.Password),
 	})
 	if err != nil {
 		return nil, err
@@ -164,6 +165,9 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 		}
 		if err := sockopt.UDPReuseaddr(udpConn); err != nil {
 			log.Warnln("Failed to Reuse UDP Address: %s", err)
+		}
+		if config.Morph {
+			udpConn = nwtransport.WrapMorphPacketConn(udpConn, config.Password)
 		}
 
 		// quic.Listen (not ListenEarly): Accept must return connections whose

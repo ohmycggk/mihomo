@@ -44,8 +44,7 @@ func startTestServer(t *testing.T) int {
 // startTestServerWith is startTestServer with an explicit certificate pair;
 // pass empty strings for the in-memory self-signed fallback.
 func startTestServerWith(t *testing.T, certificate, privateKey string) int {
-	t.Helper()
-	server, err := nwlisten.New(LC.NowhereServer{
+	return startTestServerConfig(t, LC.NowhereServer{
 		Enable:               true,
 		Listen:               "127.0.0.1:0",
 		Password:             testPassword,
@@ -53,7 +52,12 @@ func startTestServerWith(t *testing.T, certificate, privateKey string) int {
 		PrivateKey:           privateKey,
 		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
-	}, inbound.NewListenConfig(), fakeTunnel{})
+	})
+}
+
+func startTestServerConfig(t *testing.T, cfg LC.NowhereServer) int {
+	t.Helper()
+	server, err := nwlisten.New(cfg, inbound.NewListenConfig(), fakeTunnel{})
 	if err != nil {
 		t.Fatalf("nowhere.New: %v", err)
 	}
@@ -75,12 +79,17 @@ func startTestServerWith(t *testing.T, certificate, privateKey string) int {
 }
 
 func newTestClient(t *testing.T, port int, up, down string) *outbound.Nowhere {
+	return newTestClientOpt(t, port, up, down, false)
+}
+
+func newTestClientOpt(t *testing.T, port int, up, down string, morph bool) *outbound.Nowhere {
 	t.Helper()
 	client, err := outbound.NewNowhere(outbound.NowhereOption{
 		Name: "nowhere-test-client", Server: "127.0.0.1", Port: port,
 		Password: testPassword, SkipCertVerify: true,
 		Up: up, Down: down,
-		UDP: true,
+		UDP:   true,
+		Morph: morph,
 	})
 	if err != nil {
 		t.Fatalf("outbound.NewNowhere: %v", err)
@@ -254,5 +263,67 @@ func TestParseListenerNowhere(t *testing.T) {
 	}
 	if optionSelfSigned.Certificate != "" || optionSelfSigned.PrivateKey != "" {
 		t.Fatalf("Certificate/PrivateKey = %q/%q, want empty", optionSelfSigned.Certificate, optionSelfSigned.PrivateKey)
+	}
+
+	mapping["morph"] = 1
+	parsedMorph, err := listener.ParseListener(mapping)
+	if err != nil {
+		t.Fatalf("ParseListener morph=1: %v", err)
+	}
+	optionMorph, ok := parsedMorph.Config().(*IN.NowhereOption)
+	if !ok {
+		t.Fatalf("Config() = %T, want *inbound.NowhereOption", parsedMorph.Config())
+	}
+	if !optionMorph.Morph {
+		t.Fatal("Morph = false, want true for morph: 1")
+	}
+}
+
+func TestNowhereInboundMorph(t *testing.T) {
+	port := startTestServerConfig(t, LC.NowhereServer{
+		Enable:               true,
+		Listen:               "127.0.0.1:0",
+		Password:             testPassword,
+		Certificate:          testCertificate,
+		PrivateKey:           testPrivateKey,
+		ALPN:                 []string{"now/1"},
+		CongestionController: "bbr",
+		Morph:                true,
+	})
+	for _, carriers := range [][2]string{{"tcp", "tcp"}, {"udp", "udp"}, {"tcp", "udp"}, {"udp", "tcp"}} {
+		up, down := carriers[0], carriers[1]
+		t.Run(up+"/"+down, func(t *testing.T) {
+			client := newTestClientOpt(t, port, up, down, true)
+			t.Run("tcp echo", func(t *testing.T) { testTCPEcho(t, client) })
+			t.Run("udp echo", func(t *testing.T) { testUDPEcho(t, client) })
+		})
+	}
+}
+
+func TestNowhereInboundMorphMismatch(t *testing.T) {
+	plainPort := startTestServer(t)
+	morphPort := startTestServerConfig(t, LC.NowhereServer{
+		Enable:               true,
+		Listen:               "127.0.0.1:0",
+		Password:             testPassword,
+		Certificate:          testCertificate,
+		PrivateKey:           testPrivateKey,
+		ALPN:                 []string{"now/1"},
+		CongestionController: "bbr",
+		Morph:                true,
+	})
+	metadata := &C.Metadata{Host: "example.com", DstPort: 80}
+
+	morphClient := newTestClientOpt(t, plainPort, "tcp", "tcp", true)
+	ctxMorph, cancelMorph := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelMorph()
+	if _, err := morphClient.DialContext(ctxMorph, metadata); err == nil {
+		t.Fatal("morph client dialed a morph=0 server")
+	}
+	plainClient := newTestClient(t, morphPort, "tcp", "tcp")
+	ctxPlain, cancelPlain := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelPlain()
+	if _, err := plainClient.DialContext(ctxPlain, metadata); err == nil {
+		t.Fatal("morph=0 client dialed a morph server")
 	}
 }
