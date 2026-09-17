@@ -2374,8 +2374,8 @@ listeners:
     #    madSJjYQIf9o1N5GXjkW4DEEeb17qMxHdwMdNnwADAABAAEAAQACAAEAAwAIdGVz
     #    dC5jb20AAA==
     #    -----END ECH KEYS-----
-    #  alpn: # 只能填写一个值
-    #    - now/1
+    #  alpn: # 只能填写一个值；省略时默认为 nw2
+    #    - nw2
     #  congestion-controller: bbr
     #  cwnd: 32
     #  morph: true # 官方 CLI morph=1，在 TLS/QUIC 之下做 keyed transform；对端必须同样开启

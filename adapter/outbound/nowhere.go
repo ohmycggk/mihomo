@@ -506,7 +506,7 @@ func (t *vmessTLSDialer) DialTLSConn(ctx context.Context, c net.Conn) (nowhere.H
 	}, nil
 }
 
-const defaultNowhereALPN = "now/1"
+const defaultNowhereALPN = nowhere.DefaultALPN
 
 // normalizeNowhereALPN enforces the one-ALPN Nowhere profile. A missing field
 // uses the protocol default; an explicitly supplied field must contain one

@@ -156,7 +156,7 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 		listener, err = IN.NewAnyTLS(anytlsOption)
 	case "nowhere":
 		nowhereOption := &IN.NowhereOption{
-			ALPN:                 []string{"now/1"},
+			ALPN:                 []string{"nw2"},
 			CongestionController: "bbr",
 		}
 		err = decoder.Decode(mapping, nowhereOption)

@@ -36,6 +36,7 @@ type (
 )
 
 const (
+	DefaultALPN               = wire.DefaultALPN
 	DefaultPoolSize           = tcptls.DefaultPoolSize
 	MaxPoolSize               = tcptls.MaxPoolSize
 	MuxDisabled               = bundle.MuxDisabled

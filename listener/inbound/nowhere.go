@@ -87,7 +87,7 @@ func NewNowhere(options *NowhereOption) (*Nowhere, error) {
 		return nil, fmt.Errorf("nowhere %s: certificate and private-key must be set together (omit both for an in-memory self-signed certificate)", options.Name())
 	}
 	// One-ALPN profile, mirroring the outbound's normalizeNowhereALPN: an
-	// omitted field uses the default supplied by ParseListener ("now/1").
+	// omitted field uses the default supplied by ParseListener ("nw2").
 	if options.ALPN != nil {
 		if len(options.ALPN) != 1 {
 			return nil, fmt.Errorf("nowhere %s: alpn must contain exactly one value", options.Name())
