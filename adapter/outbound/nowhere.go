@@ -106,6 +106,10 @@ type NowhereOption struct {
 	CWND                 int    `proxy:"cwnd,omitempty"`
 
 	UDP bool `proxy:"udp,omitempty"`
+	// Morph enables the Nowhere 2 keyed socket transform below TLS/QUIC
+	// (official CLI morph=1). YAML true/1 enable it; omitted/false/0 is morph=0.
+	// There is no negotiation: the Portal must use the same setting.
+	Morph bool `proxy:"morph,omitempty"`
 }
 
 // DialContext implements C.ProxyAdapter.
@@ -282,7 +286,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		ServerName: serverName,
 		TLSConfig:  tlsConfig,
 		QUICConfig: quicConfig,
-		Dialer:     n.dialer, // C.Dialer is structurally identical to common.PacketDialer
+		Dialer:     nowhere.WrapMorphPacketDialer(n.dialer, string(nowhere.MorphSharedKey(option.Morph, option.Password))),
 		Congestion: orDefault(option.CongestionController, "bbr"),
 		CWND:       orInt(option.CWND, 32),
 		Observer:   nowhere.MihomoObserver{},
@@ -308,6 +312,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 			MaxConcurrentDials: derefInt(option.MaxConcurrentDials),
 			WarmBackoffInitial: secondsPtr(option.WarmBackoffInitial),
 			WarmBackoffMax:     secondsPtr(option.WarmBackoffMax),
+			MorphSharedKey:     nowhere.MorphSharedKey(option.Morph, option.Password),
 		})
 		if err != nil {
 			return nil, err

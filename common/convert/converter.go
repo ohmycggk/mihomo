@@ -709,7 +709,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 
 		case "nowhere":
-			// nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
+			// nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&morph=0|1&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
 			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
 			// username is the shared key; a password component is not part of the
 			// Nowhere credential model. `up`/`down` independently select the upload
@@ -809,6 +809,16 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 			if pin := query.Get("pin"); pin != "" && pin != "none" {
 				nowhere["pin"] = pin
+			}
+			if rawMorph := query.Get("morph"); rawMorph != "" {
+				parsed, err := strconv.Atoi(rawMorph)
+				if err != nil || (parsed != 0 && parsed != 1) {
+					log.Warnln("nowhere share-link: morph must be 0 or 1")
+					continue
+				}
+				if parsed == 1 {
+					nowhere["morph"] = true
+				}
 			}
 			if ech := query.Get("ech"); ech != "" {
 				nowhere["ech-opts"] = map[string]any{

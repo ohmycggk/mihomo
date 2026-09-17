@@ -10,6 +10,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter/outbound"
 	C "github.com/metacubex/mihomo/constant"
+	LC "github.com/metacubex/mihomo/listener/config"
 	IN "github.com/metacubex/mihomo/listener/inbound"
 	nwtransport "github.com/metacubex/mihomo/transport/nowhere"
 )
@@ -52,6 +53,10 @@ func (t *countingTunnel) calls() int32 { return t.tcp.Load() + t.udp.Load() }
 // chaining, Nowhere 1.7). up/down/pin configure the next hop towards the
 // origin; an empty up/down pair exercises the udp/udp default.
 func startRelayServer(t *testing.T, originPort int, up, down, pin string) (int, *countingTunnel) {
+	return startRelayServerOpt(t, originPort, up, down, pin, false, nil)
+}
+
+func startRelayServerOpt(t *testing.T, originPort int, up, down, pin string, morph bool, nextMorph *bool) (int, *countingTunnel) {
 	t.Helper()
 	tunnel := &countingTunnel{}
 	relay, err := IN.NewNowhere(&IN.NowhereOption{
@@ -61,6 +66,7 @@ func startRelayServer(t *testing.T, originPort int, up, down, pin string) (int, 
 		PrivateKey:           testPrivateKey,
 		ALPN:                 []string{"now/1"},
 		CongestionController: "bbr",
+		Morph:                morph,
 		Next: &IN.NowhereNextOption{
 			Server:   "127.0.0.1",
 			Port:     originPort,
@@ -68,6 +74,7 @@ func startRelayServer(t *testing.T, originPort int, up, down, pin string) (int, 
 			Up:       up,
 			Down:     down,
 			Pin:      pin,
+			Morph:    nextMorph,
 		},
 	})
 	if err != nil {
@@ -137,6 +144,8 @@ func TestNowhereNextValidation(t *testing.T) {
 		{"mix accepted", func(n *IN.NowhereNextOption) { n.Up, n.Down = "mix", "mix" }, ""},
 		{"mux=1 tcp/tcp", func(n *IN.NowhereNextOption) { n.Up, n.Down, n.Mux = "tcp", "tcp", intPointer(1) }, ""},
 		{"invalid mux", func(n *IN.NowhereNextOption) { n.Mux = intPointer(2) }, "invalid mux"},
+		{"morph inherit", func(n *IN.NowhereNextOption) {}, ""},
+		{"morph override off", func(n *IN.NowhereNextOption) { n.Morph = boolPointer(false) }, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,6 +166,8 @@ func TestNowhereNextValidation(t *testing.T) {
 }
 
 func intPointer(value int) *int { return &value }
+
+func boolPointer(value bool) *bool { return &value }
 
 // TestNowhereInboundChain verifies native Portal chaining (Nowhere 1.7): the
 // client opens flows to the relay Portal, which forwards them through the
@@ -276,4 +287,38 @@ func TestNowhereInboundMuxAndMix(t *testing.T) {
 		testUDPEcho(t, client)
 		assertTunnelUnused(t, tunnel)
 	})
+}
+
+func TestNowhereInboundChainMorph(t *testing.T) {
+	originPort := startTestServerConfig(t, LC.NowhereServer{
+		Enable:               true,
+		Listen:               "127.0.0.1:0",
+		Password:             testPassword,
+		Certificate:          testCertificate,
+		PrivateKey:           testPrivateKey,
+		ALPN:                 []string{"now/1"},
+		CongestionController: "bbr",
+		Morph:                true,
+	})
+	relayPort, tunnel := startRelayServerOpt(t, originPort, "tcp", "tcp", testNextPin, true, nil)
+	client := newTestClientOpt(t, relayPort, "tcp", "tcp", true)
+	testTCPEcho(t, client)
+	testUDPEcho(t, client)
+	assertTunnelUnused(t, tunnel)
+
+	relayUDPPort, tunnelUDP := startRelayServerOpt(t, originPort, "udp", "udp", testNextPin, true, nil)
+	clientUDP := newTestClientOpt(t, relayUDPPort, "udp", "udp", true)
+	testTCPEcho(t, clientUDP)
+	testUDPEcho(t, clientUDP)
+	assertTunnelUnused(t, tunnelUDP)
+}
+
+func TestNowhereInboundChainMorphNextOverride(t *testing.T) {
+	originPort := startTestServer(t)
+	off := false
+	relayPort, tunnel := startRelayServerOpt(t, originPort, "tcp", "tcp", testNextPin, true, &off)
+	client := newTestClientOpt(t, relayPort, "tcp", "tcp", true)
+	testTCPEcho(t, client)
+	testUDPEcho(t, client)
+	assertTunnelUnused(t, tunnel)
 }

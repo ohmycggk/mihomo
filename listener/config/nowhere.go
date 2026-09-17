@@ -5,16 +5,19 @@ import (
 )
 
 type NowhereServer struct {
-	Enable               bool         `yaml:"enable" json:"enable"`
-	Listen               string       `yaml:"listen" json:"listen"`
-	Password             string       `yaml:"password" json:"password"`
-	Certificate          string       `yaml:"certificate" json:"certificate"`
-	PrivateKey           string       `yaml:"private-key" json:"private-key"`
-	EchKey               string       `yaml:"ech-key" json:"ech-key"`
-	ALPN                 []string     `yaml:"alpn" json:"alpn,omitempty"`
-	CongestionController string       `yaml:"congestion-controller" json:"congestion-controller,omitempty"`
-	CWND                 int          `yaml:"cwnd" json:"cwnd,omitempty"`
-	Next                 *NowhereNext `yaml:"next" json:"next,omitempty"`
+	Enable               bool     `yaml:"enable" json:"enable"`
+	Listen               string   `yaml:"listen" json:"listen"`
+	Password             string   `yaml:"password" json:"password"`
+	Certificate          string   `yaml:"certificate" json:"certificate"`
+	PrivateKey           string   `yaml:"private-key" json:"private-key"`
+	EchKey               string   `yaml:"ech-key" json:"ech-key"`
+	ALPN                 []string `yaml:"alpn" json:"alpn,omitempty"`
+	CongestionController string   `yaml:"congestion-controller" json:"congestion-controller,omitempty"`
+	CWND                 int      `yaml:"cwnd" json:"cwnd,omitempty"`
+	// Morph enables the Nowhere 2 keyed socket transform below TLS/QUIC
+	// (official CLI morph=1). There is no negotiation: the peer must match.
+	Morph bool         `yaml:"morph" json:"morph,omitempty"`
+	Next  *NowhereNext `yaml:"next" json:"next,omitempty"`
 }
 
 // NowhereNext is the next-hop Portal for native Portal chaining (Nowhere 1.7+):
@@ -48,6 +51,10 @@ type NowhereNext struct {
 	// set (non-empty, non-"none") it overrides SNI/chain verification, like
 	// the outbound's pin.
 	Pin string `yaml:"pin" json:"pin,omitempty"`
+	// Morph enables Morph towards the next Portal using next.password.
+	// The inbound option layer copies the listener morph flag here when
+	// next.morph is omitted (official portal:// morph=1 controls both hops).
+	Morph bool `yaml:"morph" json:"morph,omitempty"`
 }
 
 func (n NowhereServer) String() string {
