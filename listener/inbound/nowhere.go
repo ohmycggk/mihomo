@@ -248,6 +248,9 @@ func (n *Nowhere) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (n *Nowhere) Close() error {
+	if n.l == nil {
+		return nil
+	}
 	return n.l.Close()
 }
 

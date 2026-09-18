@@ -17,6 +17,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/common/sockopt"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
@@ -378,15 +379,16 @@ func (u *upstream) HandlePacket(ctx context.Context, pc net.PacketConn, source n
 		}
 	}()
 
-	// give every flow a unique SNAT key, like sing.go's connID
 	rAddr := N.NewCustomAddr(C.NOWHERE.String(), utils.NewUUIDV4().String(), source)
+	buf := make([]byte, 64*1024)
 	for {
-		buf := make([]byte, 64*1024)
 		n, _, err := pc.ReadFrom(buf)
 		if err != nil {
-			return nil // flow closed or ctx done (the server closes pc on cancel)
+			return nil
 		}
-		u.tunnel.HandleUDPPacket(&packet{pc: pc, rAddr: rAddr, lAddr: pc.LocalAddr(), data: buf[:n]}, metadata)
+		payload := pool.Get(n)
+		copy(payload, buf[:n])
+		u.tunnel.HandleUDPPacket(&packet{pc: pc, rAddr: rAddr, lAddr: pc.LocalAddr(), data: payload}, metadata)
 	}
 }
 
@@ -440,7 +442,12 @@ func (p *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 	return p.pc.WriteTo(b, addr)
 }
 
-func (p *packet) Drop() {}
+func (p *packet) Drop() {
+	if p.data != nil {
+		_ = pool.Put(p.data)
+		p.data = nil
+	}
+}
 
 // LocalAddr returns the source IP/Port of UDP Packet
 func (p *packet) LocalAddr() net.Addr {
