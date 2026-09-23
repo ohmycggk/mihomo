@@ -168,7 +168,7 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 			log.Warnln("Failed to Reuse UDP Address: %s", err)
 		}
 		if config.Morph {
-			udpConn = nwtransport.WrapMorphPacketConn(udpConn, config.Password)
+			udpConn = nwtransport.WrapMorphPacketConn(udpConn, config.Password, false)
 		}
 
 		// quic.Listen (not ListenEarly): Accept must return connections whose
