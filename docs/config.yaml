@@ -2363,7 +2363,7 @@ listeners:
     # routing-mark: 0 # 为监听socket设置routing-mark（仅支持linux）
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
-    password: PASSWORD # 必填，与客户端共享的密钥；Portal 要求 32-64 位小写十六进制（URL 百分号解码后）
+    password: 0123456789abcdef0123456789abcdef # 必填，与客户端共享的密钥；Portal 要求 32-64 位小写十六进制（URL 百分号解码后）
     # 以下两项可选：省略时每次启动生成内存自签证书（客户端使用 skip-cert-verify 或 pin 校验）
     # certificate: ./server.crt # 证书 PEM 格式，或者 证书的路径
     # private-key: ./server.key # 证书对应的私钥 PEM 格式，或者私钥路径
@@ -2385,7 +2385,7 @@ listeners:
     #  next:
     #    server: origin.example # 必填，下一跳 Portal 地址
     #    port: 2080 # 必填，下一跳 Portal 端口（1-65535）
-    #    password: origin-key # 必填，下一跳 Portal 的共享密钥
+    #    password: 0123456789abcdef0123456789abcde0 # 必填，下一跳 Portal 的共享密钥；URL 百分号解码后须为 32-64 位小写十六进制
     #    up: tcp # 上行载体，tcp 或 udp；必须与 down 同时设置，默认 udp/udp
     #    down: tcp # 下行载体，tcp 或 udp；必须与 up 同时设置，默认 udp/udp
     #    mux: 0 # 0 专用 TLS 通道（默认），1 启用 TLS Mux；任一方向为 tcp 时生效，udp/udp 会规范为 0
