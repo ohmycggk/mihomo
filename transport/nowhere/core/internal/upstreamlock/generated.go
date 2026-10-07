@@ -5,9 +5,9 @@ package upstreamlock
 const (
 	Schema                  = 1
 	Repository              = "https://github.com/NodePassProject/Nowhere"
-	Version                 = "2.0.0"
-	Commit                  = "0453efd28659468a4be5cccc7a16d1cd67bbb1ff"
-	ProtocolSHA256          = "370b851b20a7b57d8559832d76799bb0c9ec7a3e92762c4ca749b96994484c0e"
+	Version                 = "2.2.1"
+	Commit                  = "0000696910dc9ee56c3ec87995a0b1ca8e4fc11b"
+	ProtocolSHA256          = "cc399b083a9eb3d36ee69bd4331470e73255f1a10a9068735db8187bb5b4b879"
 	VectorTreeHashAlgorithm = "sha256-tree-v1"
-	VectorTreeSHA256        = "2a93f3b0583d0e3b6ef61ab09a72f1fd5a97ca9c45d69bdb21888580fbeab21b"
+	VectorTreeSHA256        = "25ba2152cd4480788853ad9b4f1f4d73e1daf6addebc0cb07696da5e40a48415"
 )

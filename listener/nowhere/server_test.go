@@ -19,7 +19,10 @@ import (
 	nwlisten "github.com/metacubex/mihomo/listener/nowhere"
 )
 
-const testPassword = "nowhere-test-secret"
+// testPassword is a Portal-admissible shared key: 32 lowercase hexadecimal
+// characters, matching the Rust Credentials::for_portal rule. The outbound
+// accepts it unchanged because client-side keys stay lenient.
+const testPassword = "0123456789abcdef0123456789abcdef"
 
 var testCertificate, testPrivateKey, _, _ = ca.NewRandomTLSKeyPair(ca.KeyPairTypeP256)
 
@@ -286,7 +289,7 @@ func TestNowhereInboundMorph(t *testing.T) {
 		Password:             testPassword,
 		Certificate:          testCertificate,
 		PrivateKey:           testPrivateKey,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 		Morph:                true,
 	})
@@ -308,7 +311,7 @@ func TestNowhereInboundMorphMismatch(t *testing.T) {
 		Password:             testPassword,
 		Certificate:          testCertificate,
 		PrivateKey:           testPrivateKey,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 		Morph:                true,
 	})

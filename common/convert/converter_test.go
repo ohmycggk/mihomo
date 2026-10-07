@@ -485,18 +485,18 @@ func TestConvertsV2RayNowhereNegativePool(t *testing.T) {
 	assert.False(t, hasPool)
 }
 
-func TestConvertsV2RayNowhereMixMux(t *testing.T) {
-	proxies, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=mix&down=mix&mux=1#mix"))
-	assert.NoError(t, err)
-	assert.Len(t, proxies, 1)
-	assert.Equal(t, "mix", proxies[0]["up"])
-	assert.Equal(t, "mix", proxies[0]["down"])
-	assert.Equal(t, 1, proxies[0]["mux"])
-	_, err = adapter.ParseProxy(proxies[0])
-	assert.NoError(t, err)
+func TestConvertsV2RayNowhereRejectsMixCarrier(t *testing.T) {
+	// mix is not a carrier since Nowhere 2.2: the share link is skipped, so a
+	// subscription holding nothing else reports a format error.
+	_, err := ConvertsV2Ray([]byte("nowhere://secret@example.com:2077?up=mix&down=mix&mux=1#mix"))
+	assert.Error(t, err)
 
-	_, err = adapter.ParseProxy(proxies[0])
-	assert.NoError(t, err)
+	_, err = adapter.ParseProxy(map[string]any{
+		"type": "nowhere", "name": "mix", "server": "example.com",
+		"port": 2077, "password": "secret", "up": "mix", "down": "mix", "mux": 1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must be tcp or udp")
 }
 
 func TestConvertsV2RayNowhereMorph(t *testing.T) {

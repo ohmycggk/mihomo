@@ -141,9 +141,18 @@ func TestNowhereNextValidation(t *testing.T) {
 			n.Up, n.Down, n.Pool = "tcp", "tcp", intPointer(nwtransport.MaxPoolSize+1)
 		}, ""},
 		{"udp pool negative ignored", func(n *IN.NowhereNextOption) { n.Up, n.Down, n.Pool = "udp", "udp", intPointer(-1) }, ""},
-		{"mix accepted", func(n *IN.NowhereNextOption) { n.Up, n.Down = "mix", "mix" }, ""},
+		{"mix rejected", func(n *IN.NowhereNextOption) { n.Up, n.Down = "mix", "mix" }, "must be tcp or udp"},
+		{"tcp/mix rejected", func(n *IN.NowhereNextOption) { n.Up, n.Down = "tcp", "mix" }, "must be tcp or udp"},
 		{"mux=1 tcp/tcp", func(n *IN.NowhereNextOption) { n.Up, n.Down, n.Mux = "tcp", "tcp", intPointer(1) }, ""},
 		{"invalid mux", func(n *IN.NowhereNextOption) { n.Mux = intPointer(2) }, "invalid mux"},
+		{"dial4 auto accepted", func(n *IN.NowhereNextOption) { n.Dial4 = "auto" }, ""},
+		{"dial6 auto accepted", func(n *IN.NowhereNextOption) { n.Dial6 = "auto" }, ""},
+		{"dial4 v4 literal accepted", func(n *IN.NowhereNextOption) { n.Dial4 = "10.0.0.1" }, ""},
+		{"dial6 v6 literal accepted", func(n *IN.NowhereNextOption) { n.Dial6 = "2001:db8::5" }, ""},
+		{"dial4 v6 literal rejected", func(n *IN.NowhereNextOption) { n.Dial4 = "::1" }, "dial4 must be auto or an IPv4 literal"},
+		{"dial6 v4 literal rejected", func(n *IN.NowhereNextOption) { n.Dial6 = "1.2.3.4" }, "dial6 must be auto or an IPv6 literal"},
+		{"dial6 v4-mapped rejected", func(n *IN.NowhereNextOption) { n.Dial6 = "::ffff:1.2.3.4" }, "dial6 must not be an IPv4-mapped IPv6 address"},
+		{"dial4 hostname rejected", func(n *IN.NowhereNextOption) { n.Dial4 = "localhost" }, "dial4 must be auto or an IPv4 literal"},
 		{"morph inherit", func(n *IN.NowhereNextOption) {}, ""},
 		{"morph override off", func(n *IN.NowhereNextOption) { n.Morph = boolPointer(false) }, ""},
 	}
@@ -221,7 +230,7 @@ func TestNowhereInboundChainDefaultTLS(t *testing.T) {
 	assertTunnelUnused(t, tunnel)
 }
 
-func TestNowhereInboundMuxAndMix(t *testing.T) {
+func TestNowhereInboundMux(t *testing.T) {
 	originPort := startTestServer(t)
 	muxOne := 1
 
@@ -239,10 +248,20 @@ func TestNowhereInboundMuxAndMix(t *testing.T) {
 		testUDPEcho(t, client)
 	})
 
-	t.Run("client mix/mix", func(t *testing.T) {
-		client := newTestClient(t, originPort, "mix", "mix")
-		testTCPEcho(t, client)
-		testUDPEcho(t, client)
+	// mix is a client carrier policy that Nowhere 2.2 dropped: the client
+	// bundle no longer resolves it, so the outbound must reject it.
+	t.Run("client mix/mix rejected", func(t *testing.T) {
+		_, err := outbound.NewNowhere(outbound.NowhereOption{
+			Name: "nowhere-test-mix", Server: "127.0.0.1", Port: originPort,
+			Password: testPassword, SkipCertVerify: true,
+			Up: "mix", Down: "mix", UDP: true,
+		})
+		if err == nil {
+			t.Fatal("NewNowhere mix/mix: want error")
+		}
+		if !strings.Contains(err.Error(), "must be tcp or udp") {
+			t.Fatalf("NewNowhere mix/mix error = %v, want \"must be tcp or udp\"", err)
+		}
 	})
 
 	t.Run("next mux tcp/tcp", func(t *testing.T) {
@@ -280,12 +299,71 @@ func TestNowhereInboundMuxAndMix(t *testing.T) {
 		assertTunnelUnused(t, tunnel)
 	})
 
-	t.Run("next mix/mix", func(t *testing.T) {
-		relayPort, tunnel := startRelayServer(t, originPort, "mix", "mix", testNextPin)
-		client := newTestClient(t, relayPort, "udp", "udp")
-		testTCPEcho(t, client)
-		testUDPEcho(t, client)
-		assertTunnelUnused(t, tunnel)
+	t.Run("next mix/mix rejected", func(t *testing.T) {
+		_, err := IN.NewNowhere(&IN.NowhereOption{
+			BaseOption:  IN.BaseOption{NameStr: "nowhere-test-relay-mix", Listen: "127.0.0.1", Port: "0"},
+			Password:    testPassword,
+			Certificate: testCertificate,
+			PrivateKey:  testPrivateKey,
+			ALPN:        []string{"nw2"},
+			Next: &IN.NowhereNextOption{
+				Server: "127.0.0.1", Port: originPort, Password: testPassword,
+				Up: "mix", Down: "mix", Pin: testNextPin,
+			},
+		})
+		if err == nil {
+			t.Fatal("inbound.NewNowhere next mix/mix: want error")
+		}
+		if !strings.Contains(err.Error(), "must be tcp or udp") {
+			t.Fatalf("inbound.NewNowhere next mix/mix error = %v, want \"must be tcp or udp\"", err)
+		}
+	})
+
+	// The Portal admission rule (Rust Credentials::for_portal): the listener
+	// key and every enabled next-hop key must be 32–64 lowercase hexadecimal
+	// characters after URL percent decoding.
+	t.Run("portal key admission", func(t *testing.T) {
+		for _, key := range []string{"secret", "NOWHERETESTSECRETNOWHERETESTSEC", "0123456789abcdef0123456789abcde", "0123456789abcdef0123456789abcdefg", " 0123456789abcdef0123456789abcd"} {
+			_, err := IN.NewNowhere(&IN.NowhereOption{
+				BaseOption: IN.BaseOption{NameStr: "nowhere-test-key", Listen: "127.0.0.1", Port: "0"},
+				Password:   key,
+			})
+			if err == nil {
+				t.Fatalf("NewNowhere password %q: want error", key)
+			}
+			if !strings.Contains(err.Error(), "lowercase hexadecimal") {
+				t.Fatalf("NewNowhere password %q error = %v, want the shared-key rule", key, err)
+			}
+		}
+		// Odd lengths inside the range are accepted (Nowhere 2.2.1).
+		for _, key := range []string{
+			"0123456789abcdef0123456789abcdef",
+			"0123456789abcdef0123456789abcdef0",
+			"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		} {
+			if _, err := IN.NewNowhere(&IN.NowhereOption{
+				BaseOption: IN.BaseOption{NameStr: "nowhere-test-key", Listen: "127.0.0.1", Port: "0"},
+				Password:   key,
+			}); err != nil {
+				t.Fatalf("NewNowhere password %q: %v", key, err)
+			}
+		}
+		// A percent-encoded key decodes to the key text.
+		if _, err := IN.NewNowhere(&IN.NowhereOption{
+			BaseOption: IN.BaseOption{NameStr: "nowhere-test-key", Listen: "127.0.0.1", Port: "0"},
+			Password:   "%30" + "123456789abcdef0123456789abcdef",
+		}); err != nil {
+			t.Fatalf("NewNowhere percent-encoded password: %v", err)
+		}
+		// The next hop obeys the same rule.
+		_, err := IN.NewNowhere(&IN.NowhereOption{
+			BaseOption: IN.BaseOption{NameStr: "nowhere-test-key", Listen: "127.0.0.1", Port: "0"},
+			Password:   testPassword,
+			Next:       &IN.NowhereNextOption{Server: "origin.example", Port: 2080, Password: "short"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "next: password") {
+			t.Fatalf("NewNowhere next password error = %v, want the shared-key rule", err)
+		}
 	})
 }
 
@@ -296,7 +374,7 @@ func TestNowhereInboundChainMorph(t *testing.T) {
 		Password:             testPassword,
 		Certificate:          testCertificate,
 		PrivateKey:           testPrivateKey,
-		ALPN:                 []string{"now/1"},
+		ALPN:                 []string{"nw2"},
 		CongestionController: "bbr",
 		Morph:                true,
 	})

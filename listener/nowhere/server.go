@@ -1,4 +1,4 @@
-// Package nowhere bridges the Nowhere 1.8 Portal implementation from
+// Package nowhere bridges the Nowhere 2.2.1 Portal implementation from
 // github.com/metacubex/mihomo/transport/nowhere/core/server into Mihomo's inbound listener
 // framework: authenticated TCP streams and UDP packet flows are handed to the
 // tunnel exactly like any other protocol inbound, or — with a next section —
@@ -17,6 +17,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/common/sockopt"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
@@ -122,8 +123,9 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 	quicConfig.InitialConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 	quicConfig.MaxConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 
-	// Native Portal chaining (Nowhere 1.7): when next is configured, inbound
-	// flows forward to another Nowhere Portal instead of entering the tunnel.
+	// Native Portal chaining (Nowhere 1.7+, unchanged in 2.2.1): when next is
+	// configured, inbound flows forward to another Nowhere Portal instead of
+	// entering the tunnel.
 	// The next-hop bundle inherits the listener ALPN (Rust contract) and the
 	// listener congestion-controller/cwnd for its QUIC backend.
 	var flowUpstream nwserver.Upstream = &upstream{tunnel: tunnel, additions: additions}
@@ -167,7 +169,7 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 			log.Warnln("Failed to Reuse UDP Address: %s", err)
 		}
 		if config.Morph {
-			udpConn = nwtransport.WrapMorphPacketConn(udpConn, config.Password)
+			udpConn = nwtransport.WrapMorphPacketConn(udpConn, config.Password, false)
 		}
 
 		// quic.Listen (not ListenEarly): Accept must return connections whose
@@ -378,15 +380,16 @@ func (u *upstream) HandlePacket(ctx context.Context, pc net.PacketConn, source n
 		}
 	}()
 
-	// give every flow a unique SNAT key, like sing.go's connID
 	rAddr := N.NewCustomAddr(C.NOWHERE.String(), utils.NewUUIDV4().String(), source)
+	buf := make([]byte, 64*1024)
 	for {
-		buf := make([]byte, 64*1024)
 		n, _, err := pc.ReadFrom(buf)
 		if err != nil {
-			return nil // flow closed or ctx done (the server closes pc on cancel)
+			return nil
 		}
-		u.tunnel.HandleUDPPacket(&packet{pc: pc, rAddr: rAddr, lAddr: pc.LocalAddr(), data: buf[:n]}, metadata)
+		payload := pool.Get(n)
+		copy(payload, buf[:n])
+		u.tunnel.HandleUDPPacket(&packet{pc: pc, rAddr: rAddr, lAddr: pc.LocalAddr(), data: payload}, metadata)
 	}
 }
 
@@ -440,7 +443,12 @@ func (p *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 	return p.pc.WriteTo(b, addr)
 }
 
-func (p *packet) Drop() {}
+func (p *packet) Drop() {
+	if p.data != nil {
+		_ = pool.Put(p.data)
+		p.data = nil
+	}
+}
 
 // LocalAddr returns the source IP/Port of UDP Packet
 func (p *packet) LocalAddr() net.Addr {

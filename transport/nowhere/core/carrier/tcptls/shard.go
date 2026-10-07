@@ -3,9 +3,11 @@ package tcptls
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	carriermux "github.com/metacubex/mihomo/transport/nowhere/core/carrier/mux"
 	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
@@ -14,6 +16,9 @@ import (
 // MaxMuxCarriers is the Nowhere 2 client pool cap for established or connecting
 // Mux TLS carriers in one session. Both logical directions share the pool.
 const MaxMuxCarriers = 8
+const muxDialTimeout = 15 * time.Second
+
+var errNoMuxCarrier = errors.New("nowhere: no eligible TLS Mux carrier available")
 
 // MuxDirection is retained for API compatibility. Nowhere 2 uses one shared
 // full-duplex Mux pool, so uplink and downlink reservations compete together.
@@ -28,22 +33,53 @@ const (
 
 // MuxManager owns lazily opened Mux TLS carriers for one bundle session.
 type MuxManager struct {
-	cfg *Config
+	cfg    *Config
+	ctx    context.Context
+	cancel context.CancelFunc
 
-	mu     sync.Mutex
-	closed bool
-	shards []*muxShard
+	mu      sync.Mutex
+	closed  bool
+	shards  []*muxShard
+	monitor sync.WaitGroup
 }
 
 type muxShard struct {
 	mgr     *MuxManager
 	pending atomic.Int64
+	// acquisitions counts Open results still holding a stream on this
+	// carrier. The last one to close retires an effectively idle carrier
+	// instead of waiting for the idle monitor (upstream 565a43b).
+	acquisitions atomic.Int64
 
-	mu     sync.Mutex
-	handle *carriermux.Handle
-	err    error
-	ready  chan struct{}
-	once   sync.Once
+	mu        sync.Mutex
+	handle    *carriermux.Handle
+	err       error
+	ready     chan struct{}
+	readyOnce sync.Once
+	once      sync.Once
+}
+
+// errMuxShuttingDown rejects acquires issued after Close. It wraps
+// net.ErrClosed so callers that classify that sentinel as fatal keep working.
+var errMuxShuttingDown = fmt.Errorf("nowhere: tls mux manager shutting down: %w", net.ErrClosed)
+
+// muxAcquisition is one pooled-carrier stream. Closing it releases the carrier
+// reference so the last handle on an idle carrier retires it immediately
+// (upstream 565a43b).
+type muxAcquisition struct {
+	net.Conn
+	shard *muxShard
+	once  sync.Once
+}
+
+func (a *muxAcquisition) Close() error {
+	err := a.Conn.Close()
+	a.once.Do(func() {
+		if a.shard != nil {
+			a.shard.releaseAcquisition()
+		}
+	})
+	return err
 }
 
 // NewMuxManager binds a TLS config to a shared Mux carrier pool.
@@ -51,7 +87,8 @@ func NewMuxManager(cfg *Config) (*MuxManager, error) {
 	if cfg == nil {
 		return nil, errors.New("nowhere: nil TCP carrier config")
 	}
-	return &MuxManager{cfg: cfg}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &MuxManager{cfg: cfg, ctx: ctx, cancel: cancel}, nil
 }
 
 // Open assigns flowID to a shared-pool carrier, dialing another if capacity remains.
@@ -65,31 +102,49 @@ func (m *MuxManager) Open(ctx context.Context, flowID uint32, _ MuxDirection) (n
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil, net.ErrClosed
+		return nil, errMuxShuttingDown
 	}
-	shard := m.reserveLocked()
+	shard, err := m.reserveLocked(flowID)
 	m.mu.Unlock()
-	if shard == nil {
-		return nil, errors.New("nowhere: mux pool unavailable")
+	if err != nil {
+		return nil, err
 	}
 	defer shard.pending.Add(-1)
 
 	handle, err := shard.wait(ctx)
-	if err != nil {
-		if fallback := m.fallback(); fallback != nil && fallback != shard {
-			fallback.pending.Add(1)
-			defer fallback.pending.Add(-1)
-			handle, err = fallback.wait(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return handle.OpenStream(flowID)
-		}
-		return nil, err
+	if err == nil {
+		return openMuxStream(ctx, shard, handle, flowID)
 	}
-	return handle.OpenStream(flowID)
+	fallback := m.fallback(flowID)
+	if fallback != nil && fallback != shard {
+		fallback.pending.Add(1)
+		defer fallback.pending.Add(-1)
+		handle, fbErr := fallback.wait(ctx)
+		if fbErr != nil {
+			return nil, fbErr
+		}
+		return openMuxStream(ctx, fallback, handle, flowID)
+	}
+	return nil, err
 }
 
+// openMuxStream reserves and commits flowID on handle. The commit races ctx so
+// a cancelled open rolls its flow reservation back (upstream 34b4141), and the
+// returned conn releases the shard acquisition when the caller closes it.
+func openMuxStream(ctx context.Context, shard *muxShard, handle *carriermux.Handle, flowID uint32) (net.Conn, error) {
+	stream, err := handle.PrepareStream(flowID)
+	if err != nil {
+		return nil, err
+	}
+	if err := handle.OpenPrepared(ctx, stream); err != nil {
+		return nil, err
+	}
+	shard.acquisitions.Add(1)
+	return &muxAcquisition{Conn: stream, shard: shard}, nil
+}
+
+// Close gates the pool against further acquires, drains the carrier monitors,
+// and closes every pooled carrier (upstream 1eb7c33).
 func (m *MuxManager) Close() error {
 	if m == nil {
 		return nil
@@ -102,14 +157,22 @@ func (m *MuxManager) Close() error {
 	m.closed = true
 	shards := append([]*muxShard(nil), m.shards...)
 	m.shards = nil
+	cancel := m.cancel
 	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	for _, shard := range shards {
+		shard.closeWithError(errMuxShuttingDown)
+	}
+	m.monitor.Wait()
 	for _, shard := range shards {
 		shard.close()
 	}
 	return nil
 }
 
-func (m *MuxManager) reserveLocked() *muxShard {
+func (m *MuxManager) reserveLocked(flowID uint32) (*muxShard, error) {
 	live := m.shards[:0]
 	var best *muxShard
 	bestActive := 0
@@ -120,6 +183,12 @@ func (m *MuxManager) reserveLocked() *muxShard {
 			continue
 		}
 		live = append(live, shard)
+		if handle := shard.liveHandle(); handle != nil && !handle.CanOpenFlow(flowID) {
+			// The carrier still retains protocol state for this flow ID
+			// (or has exhausted its state budget); reopening the ID on it
+			// before that state retires would corrupt the stream map.
+			continue
+		}
 		active, pressure := shard.occupancy()
 		if !have || muxBetter(active, pressure, bestActive, bestPressure) {
 			best = shard
@@ -131,14 +200,45 @@ func (m *MuxManager) reserveLocked() *muxShard {
 	m.shards = live
 	if have && (bestActive == 0 || len(m.shards) >= MaxMuxCarriers) {
 		best.pending.Add(1)
-		return best
+		return best, nil
+	}
+	if len(m.shards) >= MaxMuxCarriers {
+		// Every established carrier conflicts with the requested flow ID.
+		// Retire an idle one and dial a replacement so wraparound cannot
+		// reopen that ID while protocol state survives.
+		index := -1
+		for i, shard := range m.shards {
+			if shard.pending.Load() != 0 {
+				continue
+			}
+			if handle := shard.liveHandle(); handle != nil && handle.ActiveStreams() == 0 {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return nil, errNoMuxCarrier
+		}
+		retired := m.shards[index]
+		m.shards = append(m.shards[:index], m.shards[index+1:]...)
+		retired.close()
 	}
 	shard := &muxShard{mgr: m, ready: make(chan struct{})}
 	shard.pending.Add(1)
 	m.shards = append(m.shards, shard)
 	go shard.dial()
-	go m.monitor(shard)
-	return shard
+	m.spawnMonitor(shard)
+	return shard, nil
+}
+
+// spawnMonitor runs the carrier monitor on the manager's lifetime so Close can
+// join every one of them (upstream 1eb7c33).
+func (m *MuxManager) spawnMonitor(shard *muxShard) {
+	m.monitor.Add(1)
+	go func() {
+		defer m.monitor.Done()
+		m.monitorLoop(shard)
+	}()
 }
 
 func muxBetter(active, pressure, bestActive, bestPressure int) bool {
@@ -152,7 +252,7 @@ func muxBetter(active, pressure, bestActive, bestPressure int) bool {
 	return active < bestActive
 }
 
-func (m *MuxManager) fallback() *muxShard {
+func (m *MuxManager) fallback(flowID uint32) *muxShard {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var best *muxShard
@@ -161,7 +261,7 @@ func (m *MuxManager) fallback() *muxShard {
 	have := false
 	for _, shard := range m.shards {
 		handle := shard.liveHandle()
-		if handle == nil {
+		if handle == nil || !handle.CanOpenFlow(flowID) {
 			continue
 		}
 		active, pressure := shard.occupancy()
@@ -175,27 +275,40 @@ func (m *MuxManager) fallback() *muxShard {
 	return best
 }
 
-func (m *MuxManager) monitor(shard *muxShard) {
+// monitorLoop retires carriers that stay idle and drops ones the peer closed.
+// It runs on the manager context so Close joins it deterministically.
+func (m *MuxManager) monitorLoop(shard *muxShard) {
 	ctx := context.Background()
+	if m.ctx != nil {
+		ctx = m.ctx
+	}
 	handle, err := shard.wait(ctx)
 	if err != nil {
 		m.remove(shard)
 		return
 	}
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		if handle.IsClosed() {
 			m.remove(shard)
+			loggerFrom(m.cfg).Debugf("[Nowhere] [carrier] tls_mux_carrier_disconnected reason=%s", handle.CloseReason())
 			return
 		}
 		if !handle.IdleFor(ctx, carriermux.IdleTimeout) {
 			if handle.IsClosed() {
 				m.remove(shard)
+				loggerFrom(m.cfg).Debugf("[Nowhere] [carrier] tls_mux_carrier_disconnected reason=%s", handle.CloseReason())
+				return
 			}
 			continue
 		}
 		if shard.pending.Load() == 0 && handle.ActiveStreams() == 0 && !handle.IsClosed() {
 			m.remove(shard)
-			handle.Close()
+			handle.CloseWithReason(carriermux.CloseReasonIdleTimeout)
 			return
 		}
 	}
@@ -259,7 +372,13 @@ func (s *muxShard) wait(ctx context.Context) (*carriermux.Handle, error) {
 
 func (s *muxShard) dial() {
 	s.once.Do(func() {
-		conn, err := dialMuxCarrier(context.Background(), s.mgr.cfg)
+		parent := context.Background()
+		if s.mgr != nil && s.mgr.ctx != nil {
+			parent = s.mgr.ctx
+		}
+		ctx, cancel := context.WithTimeout(parent, muxDialTimeout)
+		defer cancel()
+		conn, err := dialMuxCarrier(ctx, s.mgr.cfg)
 		if err != nil {
 			s.fail(err)
 			return
@@ -272,26 +391,74 @@ func (s *muxShard) dial() {
 		}
 		incoming.Discard()
 		s.mu.Lock()
+		if s.err != nil {
+			s.mu.Unlock()
+			handle.Close()
+			return
+		}
 		s.handle = handle
 		s.mu.Unlock()
-		close(s.ready)
+		s.finishReady()
 	})
 }
 
 func (s *muxShard) fail(err error) {
 	s.mu.Lock()
-	s.err = err
+	if s.err == nil {
+		s.err = err
+	}
 	s.mu.Unlock()
-	close(s.ready)
+	s.finishReady()
+	// Drop the shard from the pool as soon as its dial fails so the retired
+	// last-acquisition close and the failed attempt cannot observe a stale
+	// entry. The monitor wait-error path stays as a backstop.
+	if s.mgr != nil {
+		s.mgr.remove(s)
+	}
+}
+
+func (s *muxShard) finishReady() {
+	s.readyOnce.Do(func() { close(s.ready) })
 }
 
 func (s *muxShard) close() {
+	s.closeWithError(net.ErrClosed)
+}
+
+// closeWithError records a terminal shard error and closes any established
+// carrier. Acquires waiting on the dial fail with reason instead of hanging on
+// the cancelled manager context.
+func (s *muxShard) closeWithError(reason error) {
 	s.mu.Lock()
+	if s.err == nil {
+		s.err = reason
+	}
 	handle := s.handle
 	s.mu.Unlock()
+	s.finishReady()
 	if handle != nil {
 		handle.Close()
 	}
+}
+
+// releaseAcquisition drops one carrier reference. When the last reference is
+// gone and nothing is in flight, the carrier is retired immediately instead of
+// waiting for the idle monitor (upstream 565a43b).
+func (s *muxShard) releaseAcquisition() {
+	if s.acquisitions.Add(-1) != 0 {
+		return
+	}
+	if s.pending.Load() != 0 {
+		return
+	}
+	handle := s.liveHandle()
+	if handle == nil || handle.ActiveStreams() != 0 || handle.IsClosed() {
+		return
+	}
+	if s.mgr != nil {
+		s.mgr.remove(s)
+	}
+	handle.CloseWithReason(carriermux.CloseReasonIdleTimeout)
 }
 
 func errClosedConn() error { return net.ErrClosed }

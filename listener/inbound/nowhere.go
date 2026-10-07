@@ -3,6 +3,7 @@ package inbound
 import (
 	"fmt"
 	"net/netip"
+	"net/url"
 	"strings"
 
 	C "github.com/metacubex/mihomo/constant"
@@ -37,8 +38,7 @@ type NowhereNextOption struct {
 	Port     int    `inbound:"port"`
 	Password string `inbound:"password"`
 	// Up and Down independently select the carrier towards the next Portal
-	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
-	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
+	// ("tcp" or "udp"). Each defaults to "udp" and they must be set together.
 	Up   string `inbound:"up,omitempty"`
 	Down string `inbound:"down,omitempty"`
 	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1)
@@ -47,9 +47,12 @@ type NowhereNextOption struct {
 	// Pool is the warm TLS/TCP connection count, only meaningful for dedicated
 	// (mux=0) tcp/tcp (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
 	Pool *int `inbound:"pool,omitempty"`
-	// MixFallbackTimeout is the mix primary-route budget in seconds. Omitted/0
-	// uses the library default (1s).
-	MixFallbackTimeout *int `inbound:"mix-fallback-timeout,omitempty"`
+	// Dial4 is the IPv4 source address used towards the next Portal, or
+	// "auto". See nwtransport.DialPolicy.
+	Dial4 string `inbound:"dial4,omitempty"`
+	// Dial6 is the IPv6 source address used towards the next Portal, or
+	// "auto". See nwtransport.DialPolicy.
+	Dial6 string `inbound:"dial6,omitempty"`
 	// SNI overrides the TLS server name used towards the next Portal. Empty or
 	// the literal "none" disables certificate verification (a domain server is
 	// still sent as ClientHello SNI); an explicit DNS name enables chain+name
@@ -79,10 +82,14 @@ func NewNowhere(options *NowhereOption) (*Nowhere, error) {
 	if options.Password == "" {
 		return nil, fmt.Errorf("nowhere %s: missing password", options.Name())
 	}
-	// wire.NewCredentials bound, matching the Rust oracle's u8 limit
-	if len(options.Password) > 255 {
-		return nil, fmt.Errorf("nowhere %s: password exceeds 255 bytes", options.Name())
+	// The Portal admission rule (Rust Credentials::for_portal): the listener
+	// key and every enabled next-hop key must be 32–64 lowercase hexadecimal
+	// characters after URL percent decoding. Client-side keys stay lenient.
+	password, err := decodeNowherePortalKey("password", options.Password, options.Name())
+	if err != nil {
+		return nil, err
 	}
+	options.Password = password
 	if (options.Certificate == "") != (options.PrivateKey == "") {
 		return nil, fmt.Errorf("nowhere %s: certificate and private-key must be set together (omit both for an in-memory self-signed certificate)", options.Name())
 	}
@@ -138,22 +145,26 @@ func validateNowhereNext(name string, next *NowhereNextOption) error {
 	if next.Password == "" {
 		return fmt.Errorf("nowhere %s: next: missing password", name)
 	}
-	// wire.NewCredentials bound, matching the Rust oracle's u8 limit
-	if len(next.Password) > 255 {
-		return fmt.Errorf("nowhere %s: next: password exceeds 255 bytes", name)
+	// The Portal admission rule applies to every hop, including next.
+	decoded, err := decodeNowherePortalKey("next: password", next.Password, name)
+	if err != nil {
+		return err
 	}
+	next.Password = decoded
 	if _, err := nwtransport.ResolveRoutePolicy(nwtransport.RouteInputs{
-		Prefix:             fmt.Sprintf("nowhere %s: next", name),
-		Up:                 next.Up,
-		Down:               next.Down,
-		Pool:               next.Pool,
-		Mux:                next.Mux,
-		MixFallbackTimeout: next.MixFallbackTimeout,
+		Prefix: fmt.Sprintf("nowhere %s: next", name),
+		Up:     next.Up,
+		Down:   next.Down,
+		Pool:   next.Pool,
+		Mux:    next.Mux,
 		Warn: func(format string, args ...any) {
 			log.Warnln("[Nowhere](%s) next "+format, append([]any{name}, args...)...)
 		},
 	}); err != nil {
 		return err
+	}
+	if _, err := nwtransport.ParseDialPolicy("", next.Dial4, next.Dial6); err != nil {
+		return fmt.Errorf("nowhere %s: next: %w", name, err)
 	}
 	// Rust contract (vector/config.rs): the literal "none" is an alias for an
 	// omitted sni/pin.
@@ -175,6 +186,42 @@ func normalizeNowhereNone(value string) string {
 		return ""
 	}
 	return value
+}
+
+// nowherePortalKeyMinLen and nowherePortalKeyMaxLen bound the Portal shared-key
+// text. Odd lengths inside the range are accepted.
+const (
+	nowherePortalKeyMinLen = 32
+	nowherePortalKeyMaxLen = 64
+)
+
+// decodeNowherePortalKey enforces the Portal key admission rule (Rust
+// Credentials::for_portal and docs/configuration.md "Shared keys"): after URL
+// percent decoding the key must be 32–64 lowercase hexadecimal characters.
+// Uppercase letters, non-hex characters, whitespace and other lengths fail
+// before certificate loading, DNS resolution or listening. The decoded text
+// bytes are the authentication and Morph derivation input — there is no hex
+// decoding — so the decoded value is what the listener keeps.
+func decodeNowherePortalKey(field, key, name string) (string, error) {
+	decoded, err := url.PathUnescape(key)
+	if err != nil {
+		return "", fmt.Errorf("nowhere %s: %s: malformed percent escape in shared key", name, field)
+	}
+	if len(decoded) < nowherePortalKeyMinLen || len(decoded) > nowherePortalKeyMaxLen {
+		return "", nowherePortalKeyError(name, field)
+	}
+	for i := 0; i < len(decoded); i++ {
+		c := decoded[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", nowherePortalKeyError(name, field)
+		}
+	}
+	return decoded, nil
+}
+
+func nowherePortalKeyError(name, field string) error {
+	return fmt.Errorf("nowhere %s: %s: shared key must be %d–%d lowercase hexadecimal characters; use mihomo nowhere generate-key",
+		name, field, nowherePortalKeyMinLen, nowherePortalKeyMaxLen)
 }
 
 // validNowhereSNI mirrors the Rust sni rule (vector/config.rs): an explicit
@@ -207,17 +254,18 @@ func nowhereNextConfig(o *NowhereNextOption, inboundMorph bool) *LC.NowhereNext 
 		morph = *o.Morph
 	}
 	return &LC.NowhereNext{
-		Server:             o.Server,
-		Port:               o.Port,
-		Password:           o.Password,
-		Up:                 o.Up,
-		Down:               o.Down,
-		Mux:                o.Mux,
-		Pool:               o.Pool,
-		MixFallbackTimeout: o.MixFallbackTimeout,
-		SNI:                normalizeNowhereNone(o.SNI),
-		Pin:                normalizeNowhereNone(o.Pin),
-		Morph:              morph,
+		Server:   o.Server,
+		Port:     o.Port,
+		Password: o.Password,
+		Up:       o.Up,
+		Down:     o.Down,
+		Mux:      o.Mux,
+		Pool:     o.Pool,
+		Dial4:    o.Dial4,
+		Dial6:    o.Dial6,
+		SNI:      normalizeNowhereNone(o.SNI),
+		Pin:      normalizeNowhereNone(o.Pin),
+		Morph:    morph,
 	}
 }
 
@@ -248,6 +296,9 @@ func (n *Nowhere) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (n *Nowhere) Close() error {
+	if n.l == nil {
+		return nil
+	}
 	return n.l.Close()
 }
 

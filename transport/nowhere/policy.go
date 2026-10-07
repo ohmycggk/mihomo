@@ -2,7 +2,6 @@ package nowhere
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/metacubex/mihomo/transport/nowhere/core/bundle"
 )
@@ -16,27 +15,22 @@ type RouteInputs struct {
 	Down   string
 	Pool   *int
 	Mux    *int
-	// MixFallbackTimeout is the mix primary-route budget in seconds. Nil or 0
-	// leaves the library default (1s).
-	MixFallbackTimeout *int
 	// Warn reports non-fatal canonicalization. Nil warnings are discarded.
 	Warn func(format string, args ...any)
 }
 
-// RoutePolicy is the resolved Nowhere 1.8 client route: concrete or mixed
-// carriers, TLS Mux, and the dedicated tcp/tcp warm pool.
+// RoutePolicy is the resolved Nowhere client route: concrete carriers, TLS
+// Mux, and the dedicated tcp/tcp warm pool.
 type RoutePolicy struct {
-	Up, Down           string
-	MixUp, MixDown     bool
-	UsesTCP, UsesQUIC  bool
-	PoolSize           int
-	Mux                bundle.MuxMode
-	MixFallbackTimeout time.Duration
+	Up, Down          string
+	UsesTCP, UsesQUIC bool
+	PoolSize          int
+	Mux               bundle.MuxMode
 }
 
-// ResolveRoutePolicy validates up/down/mux/pool against Nowhere 1.8.3.
+// ResolveRoutePolicy validates up/down/mux/pool against Nowhere 2.2.1.
 //
-// Carriers default to udp/udp. mix is a client-only policy resolved per flow.
+// Carriers default to udp/udp and must be tcp or udp; mix is not a carrier.
 // mux=1 enables TLS Mux when TCP is possible; udp/udp&mux=1 canonicalizes to 0.
 // The warm pool applies only to dedicated (mux=0) tcp/tcp.
 func ResolveRoutePolicy(in RouteInputs) (RoutePolicy, error) {
@@ -49,7 +43,7 @@ func ResolveRoutePolicy(in RouteInputs) (RoutePolicy, error) {
 		return RoutePolicy{}, fmt.Errorf("%s: up and down must be set together", in.Prefix)
 	}
 	if !validCarrierMode(up) || !validCarrierMode(down) {
-		return RoutePolicy{}, fmt.Errorf("%s: invalid carrier (up=%q down=%q, must be tcp, udp, or mix)", in.Prefix, up, down)
+		return RoutePolicy{}, fmt.Errorf("%s: invalid carrier (up=%q down=%q, must be tcp or udp)", in.Prefix, up, down)
 	}
 
 	usesTCP := up != "udp" || down != "udp"
@@ -94,47 +88,28 @@ func ResolveRoutePolicy(in RouteInputs) (RoutePolicy, error) {
 		}
 	}
 
-	var mixTimeout time.Duration
-	if in.MixFallbackTimeout != nil {
-		if *in.MixFallbackTimeout < 0 {
-			return RoutePolicy{}, fmt.Errorf("%s: invalid mix-fallback-timeout %d (must be >= 0)", in.Prefix, *in.MixFallbackTimeout)
-		}
-		mixTimeout = time.Duration(*in.MixFallbackTimeout) * time.Second
-	}
-
 	return RoutePolicy{
 		Up: up, Down: down,
-		MixUp: up == "mix", MixDown: down == "mix",
 		UsesTCP: usesTCP, UsesQUIC: usesQUIC,
 		PoolSize: poolSize, Mux: mux,
-		MixFallbackTimeout: mixTimeout,
 	}, nil
 }
 
-// UpCarrier is the bundle uplink selector. Mix uplink is 0.
+// UpCarrier is the bundle uplink selector.
 func (p RoutePolicy) UpCarrier() Carrier {
-	if p.MixUp {
-		return 0
-	}
 	if p.Up == "tcp" {
 		return CarrierTLSTCP
 	}
 	return CarrierQUIC
 }
 
-// DownCarrier is the bundle downlink selector. Mix downlink is 0.
+// DownCarrier is the bundle downlink selector.
 func (p RoutePolicy) DownCarrier() Carrier {
-	if p.MixDown {
-		return 0
-	}
 	if p.Down == "tcp" {
 		return CarrierTLSTCP
 	}
 	return CarrierQUIC
 }
-
-// MixEnabled reports whether either direction uses the mix policy.
-func (p RoutePolicy) MixEnabled() bool { return p.MixUp || p.MixDown }
 
 func (in RouteInputs) warn(format string, args ...any) {
 	if in.Warn != nil {
@@ -143,5 +118,5 @@ func (in RouteInputs) warn(format string, args ...any) {
 }
 
 func validCarrierMode(s string) bool {
-	return s == "tcp" || s == "udp" || s == "mix"
+	return s == "tcp" || s == "udp"
 }

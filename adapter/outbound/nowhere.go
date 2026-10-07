@@ -22,13 +22,11 @@ import (
 	"github.com/metacubex/tls"
 )
 
-// Nowhere is the Nowhere v1 proxy outbound. It speaks the protocol defined by
+// Nowhere is the Nowhere v2 proxy outbound. It speaks the protocol defined by
 // Nowhere/docs/protocol.md and supports the full client carrier matrix: the
-// upload and download carriers may each independently be TLS/TCP, QUIC/UDP, or
-// mix, yielding the four fixed combinations plus Nowhere 1.8.3 mix policy for
-// both TCP relay and UDP traffic. Symmetric combinations (up==down) use the
-// direct fast path; asymmetric combinations are paired by the Portal on a
-// shared session id and flow id. mix is resolved per flow before FlowHeader.
+// upload and download carriers may each independently be TLS/TCP or QUIC/UDP.
+// Symmetric combinations (up==down) use the direct fast path; asymmetric
+// combinations are paired by the Portal on a shared session id and flow id.
 // TLS Mux (mux=1) shares marked TLS shards instead of dedicated lanes.
 type Nowhere struct {
 	*Base
@@ -55,12 +53,12 @@ type NowhereOption struct {
 	// canonical field name (matching trojan/anytls/tuic).
 	Password string `proxy:"password,omitempty"`
 	// Up and Down independently select the upload and download carrier
-	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
-	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
+	// ("tcp" or "udp"). Each defaults to "udp" and they must be set
+	// together.
 	Up   string `proxy:"up,omitempty"`
 	Down string `proxy:"down,omitempty"`
 	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1).
-	// Mux applies when either direction is tcp or mix; udp/udp&mux=1
+	// Mux applies when either direction is tcp; udp/udp&mux=1
 	// canonicalizes to 0.
 	Mux *int `proxy:"mux,omitempty"`
 	// Pool is the warm TLS/TCP connection count (0..256), only meaningful for
@@ -74,15 +72,18 @@ type NowhereOption struct {
 	// in the [Nowhere] [carrier] debug log). Compare pool=0 vs pool=5 to isolate
 	// warm-pool behavior from per-flow carrier behavior.
 	Pool *int `proxy:"pool,omitempty"`
-	// MixFallbackTimeout is the mix primary-route preparation budget in
-	// seconds. Omitted/0 uses the library default (1s).
-	MixFallbackTimeout *int `proxy:"mix-fallback-timeout,omitempty"`
 	// PrewarmOnStart fills the warm TLS/TCP pool at outbound start (tcp/tcp only).
 	// Default false keeps first-business-dial-then-replenish behavior.
 	PrewarmOnStart bool `proxy:"prewarm-on-start,omitempty"`
 	// MaxConcurrentDials caps in-flight physical TLS/TCP dials per outbound.
 	// Omitted/0 uses the shared-core default (16).
 	MaxConcurrentDials *int `proxy:"max-concurrent-dials,omitempty"`
+	// Dial4 is the IPv4 source address used for the Portal connection, or
+	// "auto". See nowhere.DialPolicy.
+	Dial4 string `proxy:"dial4,omitempty"`
+	// Dial6 is the IPv6 source address used for the Portal connection, or
+	// "auto". See nowhere.DialPolicy.
+	Dial6 string `proxy:"dial6,omitempty"`
 	// WarmBackoffInitial is the first warm-prepare retry delay in seconds after
 	// failure. Omitted/0 uses 1s.
 	WarmBackoffInitial *int `proxy:"warm-backoff-initial,omitempty"`
@@ -140,7 +141,7 @@ func (n *Nowhere) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 }
 
 // SupportUOT implements C.ProxyAdapter. The bundle exposes UoT whenever TCP can
-// be selected (a fixed tcp direction or mix).
+// be selected (a fixed tcp direction).
 func (n *Nowhere) SupportUOT() bool {
 	return n.option.Up != "udp" || n.option.Down != "udp"
 }
@@ -191,18 +192,21 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		return nil, fmt.Errorf("nowhere %s: invalid port %d", option.Name, option.Port)
 	}
 	policy, err := nowhere.ResolveRoutePolicy(nowhere.RouteInputs{
-		Prefix:             fmt.Sprintf("nowhere %s", option.Name),
-		Up:                 option.Up,
-		Down:               option.Down,
-		Pool:               option.Pool,
-		Mux:                option.Mux,
-		MixFallbackTimeout: option.MixFallbackTimeout,
+		Prefix: fmt.Sprintf("nowhere %s", option.Name),
+		Up:     option.Up,
+		Down:   option.Down,
+		Pool:   option.Pool,
+		Mux:    option.Mux,
 		Warn: func(format string, args ...any) {
 			log.Warnln("[Nowhere](%s) "+format, append([]any{option.Name}, args...)...)
 		},
 	})
 	if err != nil {
 		return nil, err
+	}
+	dialPolicy, err := nowhere.ParseDialPolicy("", option.Dial4, option.Dial6)
+	if err != nil {
+		return nil, fmt.Errorf("nowhere %s: %w", option.Name, err)
 	}
 	option.Up = policy.Up
 	option.Down = policy.Down
@@ -265,7 +269,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		}),
 		option: &option,
 	}
-	n.dialer = option.NewDialer(n.DialOptions())
+	n.dialer = nowhere.NewSourceBoundDialer(dialPolicy, option.NewDialer(n.DialOptions()))
 
 	quicConfig := &quic.Config{
 		EnableDatagrams:                true,
@@ -322,9 +326,7 @@ func NewNowhere(option NowhereOption) (*Nowhere, error) {
 		TCP: tcpCfg, Credentials: credentials, ALPN: alpn, Observer: nowhere.MihomoObserver{},
 		PoolSize: policy.PoolSize, PrewarmOnStart: option.PrewarmOnStart,
 		Up: policy.UpCarrier(), Down: policy.DownCarrier(),
-		MixUp: policy.MixUp, MixDown: policy.MixDown,
-		MixFallbackTimeout: policy.MixFallbackTimeout,
-		Mux:                policy.Mux,
+		Mux: policy.Mux,
 	}
 	if policy.UsesQUIC {
 		bundleCfg.QUIC = nowhere.NewQuicBackend(quicCfg)
@@ -506,7 +508,7 @@ func (t *vmessTLSDialer) DialTLSConn(ctx context.Context, c net.Conn) (nowhere.H
 	}, nil
 }
 
-const defaultNowhereALPN = "nw2"
+const defaultNowhereALPN = nowhere.DefaultALPN
 
 // normalizeNowhereALPN enforces the one-ALPN Nowhere profile. A missing field
 // uses the protocol default; an explicitly supplied field must contain one

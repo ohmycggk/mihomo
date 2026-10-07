@@ -1,6 +1,9 @@
 package adapter
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestParseNowhereProxy drives the public ParseProxy entry point to confirm the
 // "nowhere" type is wired into the registry and produces a C.Nowhere proxy.
@@ -80,8 +83,11 @@ func TestParseNowhereProxy(t *testing.T) {
 		"type": "nowhere", "name": "nw-mix", "server": "example.com",
 		"port": 2077, "password": "secret", "up": "mix", "down": "mix", "mux": 1,
 	}
-	if _, err := ParseProxy(mixMapping); err != nil {
-		t.Fatalf("ParseProxy mix/mux: %v", err)
+	// mix is not a carrier since Nowhere 2.2: up/down must be tcp or udp.
+	if _, err := ParseProxy(mixMapping); err == nil {
+		t.Fatalf("ParseProxy accepted mix carrier")
+	} else if !strings.Contains(err.Error(), "must be tcp or udp") {
+		t.Fatalf("ParseProxy mix error = %v, want \"must be tcp or udp\"", err)
 	}
 
 	morphMapping := map[string]any{

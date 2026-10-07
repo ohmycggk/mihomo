@@ -36,14 +36,13 @@ type (
 )
 
 const (
-	DefaultPoolSize           = tcptls.DefaultPoolSize
-	MaxPoolSize               = tcptls.MaxPoolSize
-	MuxDisabled               = bundle.MuxDisabled
-	MuxEnabled                = bundle.MuxEnabled
-	ModeTCP                   = bundle.ModeTCP
-	ModeUDP                   = bundle.ModeUDP
-	ModeMix                   = bundle.ModeMix
-	DefaultMixFallbackTimeout = bundle.DefaultMixFallbackTimeout
+	DefaultALPN     = wire.DefaultALPN
+	DefaultPoolSize = tcptls.DefaultPoolSize
+	MaxPoolSize     = tcptls.MaxPoolSize
+	MuxDisabled     = bundle.MuxDisabled
+	MuxEnabled      = bundle.MuxEnabled
+	ModeTCP         = bundle.ModeTCP
+	ModeUDP         = bundle.ModeUDP
 
 	FlowRoleOpen        = wire.FlowRoleOpen
 	FlowRoleAttach      = wire.FlowRoleAttach

@@ -59,19 +59,21 @@ func newPortalUpstream(next *LC.NowhereNext, alpn, congestionController string, 
 		return nil, nil, err
 	}
 
+	dialPolicy, err := nwtransport.ParseDialPolicy("", next.Dial4, next.Dial6)
+	if err != nil {
+		return nil, nil, fmt.Errorf("nowhere: next: %w", err)
+	}
+
 	// The chained hop always dials directly; the schema exposes no
 	// interface/routing-mark/dialer-proxy options.
-	portalDialer := dialer.NewDialer()
+	portalDialer := nwtransport.NewSourceBoundDialer(dialPolicy, dialer.NewDialer())
 
 	bundleCfg := nwtransport.BundleOptions{
 		Credentials: credentials, ALPN: alpn, Observer: nwtransport.MihomoObserver{},
-		PoolSize:           policy.PoolSize,
-		Up:                 policy.UpCarrier(),
-		Down:               policy.DownCarrier(),
-		MixUp:              policy.MixUp,
-		MixDown:            policy.MixDown,
-		MixFallbackTimeout: policy.MixFallbackTimeout,
-		Mux:                policy.Mux,
+		PoolSize: policy.PoolSize,
+		Up:       policy.UpCarrier(),
+		Down:     policy.DownCarrier(),
+		Mux:      policy.Mux,
 	}
 	if policy.UsesQUIC {
 		tlsConfig, err := portalQUICTLSConfig(serverName, alpn, skipCertVerify, next.Pin)
@@ -149,18 +151,20 @@ func resolvePortalNext(next *LC.NowhereNext) (nwtransport.RoutePolicy, error) {
 		return nwtransport.RoutePolicy{}, errors.New("nowhere: next: missing password")
 	}
 	policy, err := nwtransport.ResolveRoutePolicy(nwtransport.RouteInputs{
-		Prefix:             "nowhere: next",
-		Up:                 next.Up,
-		Down:               next.Down,
-		Pool:               next.Pool,
-		Mux:                next.Mux,
-		MixFallbackTimeout: next.MixFallbackTimeout,
+		Prefix: "nowhere: next",
+		Up:     next.Up,
+		Down:   next.Down,
+		Pool:   next.Pool,
+		Mux:    next.Mux,
 		Warn: func(format string, args ...any) {
 			log.Warnln("[Nowhere] next "+format, args...)
 		},
 	})
 	if err != nil {
 		return nwtransport.RoutePolicy{}, err
+	}
+	if _, err := nwtransport.ParseDialPolicy("", next.Dial4, next.Dial6); err != nil {
+		return nwtransport.RoutePolicy{}, fmt.Errorf("nowhere: next: %w", err)
 	}
 	if next.SNI != "" && !validPortalSNI(next.SNI) {
 		return nwtransport.RoutePolicy{}, errors.New("nowhere: next: sni must be an ASCII DNS name")

@@ -24,7 +24,6 @@ func TestResolveRoutePolicyMixAndMux(t *testing.T) {
 	poolFive := 5
 	negative := -1
 	tooLarge := MaxPoolSize + 1
-	timeout := 2
 
 	tests := []struct {
 		name     string
@@ -33,7 +32,6 @@ func TestResolveRoutePolicyMixAndMux(t *testing.T) {
 		wantQUIC bool
 		wantMux  MuxMode
 		wantPool int
-		wantMix  bool
 		wantErr  string
 	}{
 		{
@@ -57,14 +55,16 @@ func TestResolveRoutePolicyMixAndMux(t *testing.T) {
 			wantErr: "invalid mux",
 		},
 		{
-			name:    "mix/mix needs both carriers",
+			// mix is a client carrier policy that Nowhere 2.2 dropped: the
+			// core no longer exposes it, so the resolver must reject it.
+			name:    "mix/mix rejected",
 			in:      RouteInputs{Prefix: "nowhere test", Up: "mix", Down: "mix", Pool: &poolFive},
-			wantTCP: true, wantQUIC: true, wantMix: true,
+			wantErr: "must be tcp or udp",
 		},
 		{
-			name:    "tcp/mix needs both",
+			name:    "tcp/mix rejected",
 			in:      RouteInputs{Prefix: "nowhere test", Up: "tcp", Down: "mix"},
-			wantTCP: true, wantQUIC: true, wantMix: true,
+			wantErr: "must be tcp or udp",
 		},
 		{
 			name:    "one-sided up",
@@ -85,11 +85,6 @@ func TestResolveRoutePolicyMixAndMux(t *testing.T) {
 			name:    "tcp/tcp pool clamped",
 			in:      RouteInputs{Prefix: "nowhere test", Up: "tcp", Down: "tcp", Pool: &tooLarge},
 			wantTCP: true, wantPool: MaxPoolSize,
-		},
-		{
-			name:    "mix fallback timeout",
-			in:      RouteInputs{Prefix: "nowhere test", Up: "mix", Down: "udp", MixFallbackTimeout: &timeout},
-			wantTCP: true, wantQUIC: true, wantMix: true,
 		},
 	}
 
@@ -113,12 +108,6 @@ func TestResolveRoutePolicyMixAndMux(t *testing.T) {
 			}
 			if policy.PoolSize != test.wantPool {
 				t.Fatalf("pool = %d, want %d", policy.PoolSize, test.wantPool)
-			}
-			if policy.MixEnabled() != test.wantMix {
-				t.Fatalf("mix = %t, want %t", policy.MixEnabled(), test.wantMix)
-			}
-			if test.in.MixFallbackTimeout != nil && policy.MixFallbackTimeout.Seconds() != float64(*test.in.MixFallbackTimeout) {
-				t.Fatalf("mix fallback = %s, want %ds", policy.MixFallbackTimeout, *test.in.MixFallbackTimeout)
 			}
 		})
 	}

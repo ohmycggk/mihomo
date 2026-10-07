@@ -29,8 +29,7 @@ type NowhereNext struct {
 	Port     int    `yaml:"port" json:"port"`
 	Password string `yaml:"password" json:"password"`
 	// Up and Down independently select the carrier towards the next Portal
-	// ("tcp", "udp", or "mix"). Each defaults to "udp" and they must be set
-	// together. mix is a Nowhere 1.8.3 client policy resolved per flow.
+	// ("tcp" or "udp"). Each defaults to "udp" and they must be set together.
 	Up   string `yaml:"up" json:"up,omitempty"`
 	Down string `yaml:"down" json:"down,omitempty"`
 	// Mux selects dedicated TLS lanes (0, default) or marked Mux shards (1)
@@ -39,9 +38,12 @@ type NowhereNext struct {
 	// Pool is the warm TLS/TCP connection count, only meaningful for dedicated
 	// (mux=0) tcp/tcp (default 5 there, 0 otherwise; max tcptls.MaxPoolSize).
 	Pool *int `yaml:"pool" json:"pool,omitempty"`
-	// MixFallbackTimeout is the mix primary-route budget in seconds. Omitted/0
-	// uses the library default (1s).
-	MixFallbackTimeout *int `yaml:"mix-fallback-timeout" json:"mix-fallback-timeout,omitempty"`
+	// Dial4 is the IPv4 source address used towards the next Portal, or
+	// "auto". See transport/nowhere.DialPolicy.
+	Dial4 string `yaml:"dial4" json:"dial4,omitempty"`
+	// Dial6 is the IPv6 source address used towards the next Portal, or
+	// "auto". See transport/nowhere.DialPolicy.
+	Dial6 string `yaml:"dial6" json:"dial6,omitempty"`
 	// SNI overrides the TLS server name used towards the next Portal. Empty or
 	// the literal "none" disables certificate verification (a domain server is
 	// still sent as ClientHello SNI); an explicit DNS name enables chain+name

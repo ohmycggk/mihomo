@@ -1,14 +1,16 @@
 package mux
 
 import (
+	"errors"
+	"fmt"
 	"io"
 
 	"github.com/metacubex/mihomo/transport/nowhere/core/wire"
 )
 
 func (s *shared) runReader(r io.Reader) {
-	_ = s.readLoop(r)
-	s.close()
+	err := s.readLoop(r)
+	s.closeWithReason(readerCloseReason(err))
 }
 
 func (s *shared) readLoop(r io.Reader) error {
@@ -19,7 +21,7 @@ func (s *shared) readLoop(r io.Reader) error {
 		}
 		header, err := wire.DecodeMuxHeader(headerBuf[:])
 		if err != nil {
-			return err
+			return protocolError(err)
 		}
 		payloadLen := wire.MuxPayloadLen(header)
 		var payload []byte
@@ -32,19 +34,44 @@ func (s *shared) readLoop(r io.Reader) error {
 		switch header.Kind {
 		case wire.MuxFrameOpen:
 			if err := s.receiveOpen(header); err != nil {
-				return err
+				return protocolError(err)
 			}
 		case wire.MuxFrameData:
 			if err := s.receiveData(header, payload); err != nil {
-				return err
+				return protocolError(err)
 			}
 		case wire.MuxFrameWindow:
 			if err := s.receiveWindow(header); err != nil {
-				return err
+				return protocolError(err)
 			}
 		case wire.MuxFrameFin, wire.MuxFrameReset:
 			s.receiveClose(header)
 		}
+	}
+}
+
+// protocolError marks err as a carrier-fatal protocol violation.
+func protocolError(err error) error {
+	if err == nil || errors.Is(err, errClosed) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", errProtocolViolation, err)
+}
+
+// readerCloseReason classifies the read loop's terminal error (upstream
+// MuxCloseReason mapping).
+func readerCloseReason(err error) CloseReason {
+	switch {
+	case err == nil:
+		return CloseReasonApplication
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return CloseReasonPeerEof
+	case errors.Is(err, errClosed):
+		return CloseReasonApplication
+	case errors.Is(err, errProtocolViolation):
+		return CloseReasonProtocolViolation
+	default:
+		return CloseReasonReaderFailure
 	}
 }
 
@@ -63,7 +90,12 @@ func (s *shared) receiveOpen(header wire.MuxHeader) error {
 		}
 		if flow.sendCredit.availablePermits()+extra > creditUnits(maxStreamWindowBytes) {
 			s.flowsMu.Unlock()
-			return errWindowOverflow
+			// An otherwise valid OPEN whose extension exceeds the stream
+			// window resets only that flow.
+			if _, err := s.prepareReset(header.FlowID, flow); err != nil {
+				return err
+			}
+			return nil
 		}
 		flow.sendCredit.add(extra)
 		s.flowsMu.Unlock()
@@ -73,9 +105,30 @@ func (s *shared) receiveOpen(header wire.MuxHeader) error {
 
 func (s *shared) receiveData(header wire.MuxHeader, payload []byte) error {
 	charge := frameCharge(len(payload))
-	ch, err := s.admitReceive(header.FlowID, charge)
+	target, ch, flow, err := s.admitReceive(header.FlowID, charge)
 	if err != nil {
 		return err
+	}
+	switch target {
+	case receiveDiscard:
+		// Keep the per-stream debit so a peer cannot send an unbounded
+		// amount after the application has finished with this flow.
+		s.releaseConnReceive(charge)
+		return nil
+	case receiveAbandoned:
+		// The local read half was abandoned while its writer is still
+		// live. Return credit for the discarded bytes without killing
+		// other flows.
+		s.releaseReceive(header.FlowID, flow.generation, charge)
+		return nil
+	case receiveReset:
+		// Per-flow protocol failure: return the connection credit and
+		// terminate only the offending flow.
+		s.releaseConnReceive(charge)
+		if _, err := s.prepareReset(header.FlowID, flow); err != nil {
+			return err
+		}
+		return nil
 	}
 	select {
 	case <-s.closedCh:
@@ -88,21 +141,31 @@ func (s *shared) receiveData(header wire.MuxHeader, payload []byte) error {
 func (s *shared) receiveClose(header wire.MuxHeader) {
 	if header.Kind == wire.MuxFrameReset {
 		if flow := s.removeFlow(header.FlowID); flow != nil {
-			select {
-			case flow.inbound <- inbound{kind: inboundReset}:
-			case <-s.closedCh:
-			}
+			s.resetInbound(flow)
 		}
 		return
 	}
 	s.flowsMu.Lock()
 	flow := s.flows[header.FlowID]
 	var ch chan inbound
+	var removed *flowState
 	if flow != nil && !flow.remoteFin {
-		flow.remoteFin = true
-		ch = flow.inbound
+		if flow.localParts == 0 && flow.localFinSent {
+			// Both application halves are gone and our FIN reached the
+			// wire; nothing can legitimately follow on this flow.
+			delete(s.flows, header.FlowID)
+			removed = flow
+		} else {
+			flow.remoteFin = true
+			ch = flow.inbound
+		}
 	}
 	s.flowsMu.Unlock()
+	if removed != nil {
+		removed.sendCredit.close()
+		removed.sendSlot.close()
+	}
+	s.notifyActive()
 	if ch != nil {
 		select {
 		case ch <- inbound{kind: inboundFin}:
@@ -123,6 +186,7 @@ func (s *shared) receiveWindow(header wire.MuxHeader) error {
 		}
 		return nil
 	}
+	var overflow *flowState
 	s.flowsMu.Lock()
 	flow := s.flows[header.FlowID]
 	if flow == nil {
@@ -130,16 +194,29 @@ func (s *shared) receiveWindow(header wire.MuxHeader) error {
 		return nil
 	}
 	if flow.sendCredit.availablePermits()+credit > creditUnits(maxStreamWindowBytes) {
-		s.flowsMu.Unlock()
-		return errWindowOverflow
+		overflow = flow
+	} else {
+		flow.sendCredit.add(credit)
 	}
-	flow.sendCredit.add(credit)
 	s.flowsMu.Unlock()
+	if overflow != nil {
+		// Stream credit that would exceed its window resets only that flow.
+		if _, err := s.prepareReset(header.FlowID, overflow); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s *shared) runWriter(w io.Writer) {
-	_ = s.writeLoop(w)
+	err := s.writeLoop(w)
+	if err != nil && !errors.Is(err, errClosed) {
+		// A frame that could not be written is a writer failure. A racing
+		// reader path may have classified the same disconnect first; the
+		// first recorded reason wins.
+		s.closeWithReason(CloseReasonWriterFailure)
+		return
+	}
 	s.close()
 }
 
@@ -184,6 +261,17 @@ func (s *shared) writeItem(w io.Writer, item outbound) error {
 		}
 		return err
 	}
+	// Stale-generation frames (a flow ID that was reset and reused) are
+	// dropped; DATA refunds the connection credit its sender consumed.
+	if !s.isCurrentFlow(item.header.FlowID, item.generation) {
+		if len(item.payload) > 0 {
+			s.connSend.add(frameCharge(len(item.payload)))
+		}
+		if item.release != nil {
+			item.release.add(1)
+		}
+		return nil
+	}
 	encoded, err := wire.EncodeMuxHeader(item.header)
 	if err != nil {
 		return err
@@ -196,6 +284,10 @@ func (s *shared) writeItem(w io.Writer, item outbound) error {
 			return err
 		}
 	}
+	if item.header.Kind == wire.MuxFrameFin {
+		// The FIN is on the wire; retained state for this flow may retire.
+		s.finishLocalFin(item.header.FlowID, item.generation)
+	}
 	if item.release != nil {
 		item.release.add(1)
 	}
@@ -203,6 +295,13 @@ func (s *shared) writeItem(w io.Writer, item outbound) error {
 }
 
 func (s *shared) writePendingWindows(w io.Writer) error {
+	s.pendingResetsMu.Lock()
+	resets := make([]uint32, 0, len(s.pendingResets))
+	for flowID := range s.pendingResets {
+		resets = append(resets, flowID)
+	}
+	s.pendingResetsMu.Unlock()
+
 	connection := int(s.pendingConn.Swap(0))
 	s.readyMu.Lock()
 	ready := append([]uint32(nil), s.ready...)
@@ -211,6 +310,19 @@ func (s *shared) writePendingWindows(w io.Writer) error {
 
 	var frames []byte
 	var err error
+	// Queued RESETs are written before the WINDOW batch; the IDs stay
+	// reserved until the frames land.
+	for _, flowID := range resets {
+		header, headerErr := wire.ResetMuxHeader(flowID)
+		if headerErr != nil {
+			return headerErr
+		}
+		encoded, encodeErr := wire.EncodeMuxHeader(header)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		frames = append(frames, encoded[:]...)
+	}
 	frames, err = appendWindows(frames, 0, connection)
 	if err != nil {
 		return err
@@ -237,7 +349,13 @@ func (s *shared) writePendingWindows(w io.Writer) error {
 	if len(frames) == 0 {
 		return nil
 	}
-	return writeFull(w, frames)
+	if err := writeFull(w, frames); err != nil {
+		return err
+	}
+	for _, flowID := range resets {
+		s.finishReset(flowID)
+	}
+	return nil
 }
 
 func appendWindows(encoded []byte, flowID uint32, credit int) ([]byte, error) {
@@ -260,27 +378,27 @@ func appendWindows(encoded []byte, flowID uint32, credit int) ([]byte, error) {
 	return encoded, nil
 }
 
-func (s *shared) sendData(flowID uint32, payload []byte) error {
+func (s *shared) sendData(st *Stream, payload []byte) error {
 	charge := frameCharge(len(payload))
 	s.flowsMu.Lock()
-	flow := s.flows[flowID]
+	flow := s.flows[st.flowID]
 	s.flowsMu.Unlock()
-	if flow == nil {
+	if flow == nil || flow.generation != st.generation {
+		// The flow was retired and its ID reused; a stale Stream must not
+		// write into the replacement.
 		return errClosed
 	}
-	if err := flow.sendSlot.acquire(1, s.closedCh); err != nil {
+	if err := st.acquireCredits(flow, charge); err != nil {
 		return err
 	}
-	if err := flow.sendCredit.acquire(charge, s.closedCh); err != nil {
-		flow.sendSlot.add(1)
-		return err
-	}
-	if err := s.connSend.acquire(charge, s.closedCh); err != nil {
+	wait, _, closed := st.writeSnapshot()
+	if closed {
 		flow.sendSlot.add(1)
 		flow.sendCredit.add(charge)
-		return err
+		s.connSend.add(charge)
+		return errClosed
 	}
-	header, err := wire.DataMuxHeader(flowID, len(payload))
+	header, err := wire.DataMuxHeader(st.flowID, len(payload))
 	if err != nil {
 		flow.sendSlot.add(1)
 		flow.sendCredit.add(charge)
@@ -288,13 +406,73 @@ func (s *shared) sendData(flowID uint32, payload []byte) error {
 		return err
 	}
 	copied := append([]byte(nil), payload...)
-	if err := s.sendOutbound(outbound{header: header, payload: copied, release: flow.sendSlot}); err != nil {
+	if err := s.sendOutbound(outbound{header: header, payload: copied, release: flow.sendSlot, generation: st.generation}, wait); err != nil {
 		flow.sendSlot.add(1)
 		flow.sendCredit.add(charge)
 		s.connSend.add(charge)
 		return err
 	}
 	return nil
+}
+
+func (st *Stream) acquireCredits(flow *flowState, charge int) error {
+	for {
+		if err := st.checkWriteDeadline(); err != nil {
+			return err
+		}
+		wait, deadline, closed := st.writeSnapshot()
+		if closed {
+			return errClosed
+		}
+		if err := flow.sendSlot.acquireUntil(1, st.shared.closedCh, wait, deadline); err != nil {
+			if err == errInterrupted {
+				continue
+			}
+			return err
+		}
+		break
+	}
+	for {
+		if err := st.checkWriteDeadline(); err != nil {
+			flow.sendSlot.add(1)
+			return err
+		}
+		wait, deadline, closed := st.writeSnapshot()
+		if closed {
+			flow.sendSlot.add(1)
+			return errClosed
+		}
+		if err := flow.sendCredit.acquireUntil(charge, st.shared.closedCh, wait, deadline); err != nil {
+			if err == errInterrupted {
+				continue
+			}
+			flow.sendSlot.add(1)
+			return err
+		}
+		break
+	}
+	for {
+		if err := st.checkWriteDeadline(); err != nil {
+			flow.sendSlot.add(1)
+			flow.sendCredit.add(charge)
+			return err
+		}
+		wait, deadline, closed := st.writeSnapshot()
+		if closed {
+			flow.sendSlot.add(1)
+			flow.sendCredit.add(charge)
+			return errClosed
+		}
+		if err := st.shared.connSend.acquireUntil(charge, st.shared.closedCh, wait, deadline); err != nil {
+			if err == errInterrupted {
+				continue
+			}
+			flow.sendSlot.add(1)
+			flow.sendCredit.add(charge)
+			return err
+		}
+		return nil
+	}
 }
 
 func writeFull(w io.Writer, p []byte) error {
