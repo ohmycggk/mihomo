@@ -1,4 +1,4 @@
-// Package nowhere bridges the Nowhere 1.8 Portal implementation from
+// Package nowhere bridges the Nowhere 2.2.1 Portal implementation from
 // github.com/metacubex/mihomo/transport/nowhere/core/server into Mihomo's inbound listener
 // framework: authenticated TCP streams and UDP packet flows are handed to the
 // tunnel exactly like any other protocol inbound, or — with a next section —
@@ -123,8 +123,9 @@ func New(config LC.NowhereServer, lc C.InboundListenConfig, tunnel C.Tunnel, add
 	quicConfig.InitialConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 	quicConfig.MaxConnectionReceiveWindow = nwtransport.RecommendedConnectionReceiveWindow
 
-	// Native Portal chaining (Nowhere 1.7): when next is configured, inbound
-	// flows forward to another Nowhere Portal instead of entering the tunnel.
+	// Native Portal chaining (Nowhere 1.7+, unchanged in 2.2.1): when next is
+	// configured, inbound flows forward to another Nowhere Portal instead of
+	// entering the tunnel.
 	// The next-hop bundle inherits the listener ALPN (Rust contract) and the
 	// listener congestion-controller/cwnd for its QUIC backend.
 	var flowUpstream nwserver.Upstream = &upstream{tunnel: tunnel, additions: additions}

@@ -709,11 +709,11 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 
 		case "nowhere":
-			// nowhere://<key>@host:port?up=tcp|udp|mix&down=tcp|udp|mix&mux=0|1&morph=0|1&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
+			// nowhere://<key>@host:port?up=tcp|udp&down=tcp|udp&mux=0|1&morph=0|1&sni=...&alpn=...&pool=0..256&insecure=0|1&ech=...#name
 			// Mirrors Anywhere's ProxyConfiguration+URLParsing.parseNowhere. The URL
 			// username is the shared key; a password component is not part of the
 			// Nowhere credential model. `up`/`down` independently select the upload
-			// and download carrier (or mix policy) and default to udp/udp.
+			// and download carrier and default to udp/udp.
 			urlNowhere, err := url.Parse(line)
 			if err != nil {
 				continue
@@ -851,5 +851,5 @@ func uniqueName(names map[string]int, name string) string {
 }
 
 func validNowhereShareCarrier(s string) bool {
-	return s == "tcp" || s == "udp" || s == "mix"
+	return s == "tcp" || s == "udp"
 }

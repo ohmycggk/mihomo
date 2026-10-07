@@ -258,24 +258,16 @@ func TestNowhereMuxAndMixConstruction(t *testing.T) {
 	}
 	_ = n.Close()
 
-	n, err = NewNowhere(NowhereOption{
+	// mix is not a carrier since Nowhere 2.2: the client policy was dropped
+	// together with the core's MixUp/MixDown, so mix/mix must be rejected.
+	if _, err := NewNowhere(NowhereOption{
 		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
 		Up: "mix", Down: "mix",
-	})
-	if err != nil {
-		t.Fatalf("NewNowhere mix/mix: %v", err)
+	}); err == nil {
+		t.Fatal("NewNowhere mix/mix: want error")
+	} else if !strings.Contains(err.Error(), "must be tcp or udp") {
+		t.Fatalf("NewNowhere mix/mix error = %v, want \"must be tcp or udp\"", err)
 	}
-	bundle, ok = n.bundle.(*nowhere.CarrierBundle)
-	if !ok {
-		t.Fatalf("bundle = %T, want *nowhere.CarrierBundle", n.bundle)
-	}
-	if !bundle.MixEnabled() {
-		t.Fatal("mix/mix MixEnabled = false")
-	}
-	if !n.SupportUOT() {
-		t.Fatal("mix/mix SupportUOT = false")
-	}
-	_ = n.Close()
 
 	if _, err := NewNowhere(NowhereOption{
 		Name: "nw-test", Server: "example.com", Port: 2077, Password: "secret",
